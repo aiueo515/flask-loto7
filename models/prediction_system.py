@@ -259,50 +259,36 @@ class AutoFetchEnsembleLoto7:
                         float(np.mean(gaps)),              # 平均ギャップ
                         float(max(gaps)),                  # 最大ギャップ
                         float(min(gaps)),                  # 最小ギャップ
-                        float(len([x for x in current if x <= 12])), # 小数字数
+                        float(sum(1 for x in current if x <= 19))  # 前半数
                     ]
                     
-                    # 次回予測ターゲット
-                    if i < len(data) - 1:
-                        next_nums = []
-                        for col in main_cols:
-                            if col in data.columns:
-                                next_nums.append(int(data.iloc[i+1][col]))
-                        
-                        if len(next_nums) == 7:
-                            for target_num in next_nums:
-                                features.append(feat.copy())
-                                targets.append(target_num)
+                    features.append(feat)
+                    
+                    # ターゲット（各番号を予測）
+                    for num in current:
+                        targets.append(num)
                         
                 except Exception as e:
                     continue
-                
-                if (i + 1) % 100 == 0:
-                    logger.info(f"  特徴量進捗: {i+1}/{len(data)}件")
             
-            # パターン統計
-            if len(features) > 0:
-                sum_patterns = []
-                for i in range(len(data)):
-                    try:
-                        current = []
-                        for col in main_cols:
-                            if col in data.columns:
-                                current.append(int(data.iloc[i][col]))
-                        if len(current) == 7 and all(1 <= x <= 37 for x in current) and len(set(current)) == 7:
-                            sum_patterns.append(sum(current))
-                    except:
-                        continue
-                
-                if sum_patterns:
-                    self.pattern_stats = {
-                        'avg_sum': float(np.mean(sum_patterns)),
-                        'std_sum': float(np.std(sum_patterns)),
-                        'most_frequent_pairs': self.pair_freq.most_common(10)
-                    }
+            # パターン統計更新
+            if features:
+                features_array = np.array(features)
+                self.pattern_stats = {
+                    'avg_sum': float(np.mean(features_array[:, 2])),
+                    'avg_odd': float(np.mean(features_array[:, 3])),
+                    'avg_range': float(np.mean(features_array[:, 7])),
+                    'avg_continuous': float(np.mean(features_array[:, 8]))
+                }
             
-            logger.info(f"高度特徴量完成: {len(features)}個（16次元）")
-            return np.array(features), np.array(targets)
+            # 特徴量を番号分複製
+            X = []
+            for feat in features:
+                for _ in range(7):
+                    X.append(feat)
+            
+            logger.info(f"特徴量作成完了: {len(features)}組 → {len(X)}サンプル")
+            return np.array(X), np.array(targets)
             
         except Exception as e:
             logger.error(f"特徴量エンジニアリングエラー: {e}")
@@ -374,7 +360,7 @@ class AutoFetchEnsembleLoto7:
                         X_scaled = scaler.transform([base_features])
                         
                         # 複数回予測
-                        for _ in range(8):
+                        for _ in range(5):
                             if hasattr(model, 'predict_proba'):
                                 proba = model.predict_proba(X_scaled)[0]
                                 classes = model.classes_
@@ -390,24 +376,13 @@ class AutoFetchEnsembleLoto7:
                                     ensemble_votes[int(pred)] += weight
                                     
                     except Exception as e:
+                        logger.error(f"予測エラー ({name}): {e}")
                         continue
                 
-                # 頻出数字と組み合わせ
-                frequent_nums = [num for num, _ in self.freq_counter.most_common(15)]
-                for num in frequent_nums[:8]:
-                    ensemble_votes[num] += 0.1
-                
                 # 上位7個を選択
-                top_numbers = [num for num, _ in ensemble_votes.most_common(7)]
-                
-                # 不足分をランダム補完
-                while len(top_numbers) < 7:
-                    candidate = np.random.randint(1, 38)
-                    if candidate not in top_numbers:
-                        top_numbers.append(candidate)
-                
-                final_pred = sorted([int(x) for x in top_numbers[:7]])
-                predictions.append(final_pred)
+                if len(ensemble_votes) >= 7:
+                    selected_numbers = [num for num, _ in ensemble_votes.most_common(7)]
+                    predictions.append(sorted(selected_numbers))
             
             return predictions
             
@@ -459,39 +434,31 @@ class AutoFetchEnsembleLoto7:
                                     selected = np.random.choice(classes, p=proba/proba.sum())
                                     if 1 <= selected <= 37:
                                         weight = self.model_weights.get(name, 0.33)
+                                        
+                                        # ブースト番号には追加重み
+                                        if int(selected) in boost_numbers:
+                                            weight *= 1.5
+                                            
                                         ensemble_votes[int(selected)] += weight
                             else:
                                 pred = model.predict(X_scaled)[0]
                                 if 1 <= pred <= 37:
                                     weight = self.model_weights.get(name, 0.33)
+                                    
+                                    # ブースト番号には追加重み
+                                    if int(pred) in boost_numbers:
+                                        weight *= 1.5
+                                        
                                     ensemble_votes[int(pred)] += weight
                                     
                     except Exception as e:
+                        logger.error(f"予測エラー ({name}): {e}")
                         continue
                 
-                # 頻出数字と組み合わせ
-                frequent_nums = [num for num, _ in self.freq_counter.most_common(15)]
-                for num in frequent_nums[:8]:
-                    ensemble_votes[num] += 0.1
-                
-                # 学習改善：頻繁に見逃す数字をブースト
-                for num in boost_numbers:
-                    if 1 <= num <= 37:
-                        ensemble_votes[num] += 0.2
-                        if i == 0:  # 最初の予測時のみログ
-                            logger.info(f"  {num}番をブースト（頻出見逃し）")
-                
                 # 上位7個を選択
-                top_numbers = [num for num, _ in ensemble_votes.most_common(7)]
-                
-                # 不足分をランダム補完
-                while len(top_numbers) < 7:
-                    candidate = np.random.randint(1, 38)
-                    if candidate not in top_numbers:
-                        top_numbers.append(candidate)
-                
-                final_pred = sorted([int(x) for x in top_numbers[:7]])
-                predictions.append(final_pred)
+                if len(ensemble_votes) >= 7:
+                    selected_numbers = [num for num, _ in ensemble_votes.most_common(7)]
+                    predictions.append(sorted(selected_numbers))
             
             return predictions
             
@@ -500,84 +467,43 @@ class AutoFetchEnsembleLoto7:
             return []
     
     def run_timeseries_validation(self):
-        """時系列交差検証を実行（第2段階）"""
+        """時系列検証実行（第2段階）"""
         try:
-            logger.info("=== 時系列交差検証実行開始 ===")
+            logger.info("=== 時系列検証開始 ===")
             
-            if self.data_fetcher.latest_data is None:
-                logger.error("データが読み込まれていません")
+            # データ取得
+            if not self.data_fetcher.fetch_latest_data():
+                logger.error("データ取得失敗")
                 return None
             
-            # バリデーター初期化
-            self.validator = TimeSeriesCrossValidator()
+            # 時系列検証器初期化
+            if not self.validator:
+                self.validator = TimeSeriesCrossValidator(self)
             
-            # データ準備
-            data = self.data_fetcher.latest_data
-            main_cols = self.data_fetcher.main_columns
-            
-            # 1. 固定窓検証
-            fixed_results = self.validator.fixed_window_validation(
-                data, main_cols, self.data_fetcher.round_column
+            # 検証実行
+            results = self.validator.run_validation(
+                self.data_fetcher.latest_data,
+                self.data_fetcher.main_columns,
+                self.data_fetcher.round_column
             )
             
-            # 2. 累積窓検証
-            expanding_results = self.validator.expanding_window_validation(
-                data, main_cols, self.data_fetcher.round_column
-            )
-            
-            # 3. 結果比較
-            comparison = self.validator.compare_validation_methods()
-            
-            # 4. モデル重みを調整
-            if comparison:
-                self._adjust_model_weights(comparison)
-            
-            logger.info("時系列交差検証完了")
-            return comparison
+            logger.info("時系列検証完了")
+            return results
             
         except Exception as e:
             logger.error(f"時系列検証エラー: {e}")
             return None
     
-    def _adjust_model_weights(self, comparison):
-        """検証結果に基づいてモデル重みを調整"""
-        logger.info("=== モデル重み調整 ===")
-        
-        # 基本調整率
-        adjustment_rate = 0.1
-        
-        # 固定窓が優位な場合
-        if 'fixed' in comparison.get('recommendation', ''):
-            logger.info("固定窓優位のため、短期パターン重視に調整")
-            # Random Forestの重みを増加（短期パターンに強い）
-            self.model_weights['random_forest'] *= (1 + adjustment_rate)
-            self.model_weights['neural_network'] *= (1 - adjustment_rate * 0.5)
-        else:
-            logger.info("累積窓優位のため、長期トレンド重視に調整")
-            # Gradient Boostingの重みを増加（長期トレンドに強い）
-            self.model_weights['gradient_boost'] *= (1 + adjustment_rate)
-            self.model_weights['random_forest'] *= (1 - adjustment_rate * 0.5)
-        
-        # 重みの正規化
-        total_weight = sum(self.model_weights.values())
-        for model in self.model_weights:
-            self.model_weights[model] /= total_weight
-        
-        logger.info("調整後のモデル重み:")
-        for model, weight in self.model_weights.items():
-            logger.info(f"  {model}: {weight:.3f}")
-    
     def run_auto_verification_learning(self):
-        """自動照合・学習改善を実行（第3段階）"""
+        """自動照合学習実行（第3段階）"""
         try:
-            logger.info("=== 自動照合・学習改善実行開始 ===")
+            logger.info("=== 自動照合・学習改善開始 ===")
             
-            if self.data_fetcher.latest_data is None:
-                logger.info("データ取得が必要です...")
-                if not self.data_fetcher.fetch_latest_data():
-                    return None
+            # データ取得
+            if not self.data_fetcher.fetch_latest_data():
+                logger.error("データ取得失敗")
+                return None
             
-            # データ準備
             latest_data = self.data_fetcher.latest_data
             main_cols = self.data_fetcher.main_columns
             
@@ -625,4 +551,14 @@ class AutoFetchEnsembleLoto7:
             'has_data': self.data_fetcher.latest_data is not None,
             'prediction_history': self.history.get_prediction_summary(),
             'learning_status': self.auto_learner.get_learning_summary()
+        }
         
+        # ファイル状態
+        if self.file_manager:
+            status['files'] = {
+                'model_exists': self.file_manager.model_exists(),
+                'history_exists': self.file_manager.history_exists(),
+                'data_cached': self.file_manager.data_cached()
+            }
+        
+        return status
