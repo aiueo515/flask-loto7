@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: loto7-prediction-api
+    env: python
+    plan: free  # または starter, standard, pro
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app --timeout 300 --workers 1 --max-requests 1000
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.6
+      - key: FLASK_ENV
+        value: production
+      - key: FLASK_DEBUG
+        value: false
+      - key: PORT
+        generateValue: true
+    disk:
+      name: loto7-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1  # 無料プランでは1GB制限
+    
+    # ヘルスチェック設定
+    healthCheckPath: /
+    
+    # 自動デプロイ設定
+    autoDeploy: true
+    
+    # ビルド設定
+    dockerCommand: |
+      # Pythonキャッシュ無効化でメモリ使用量削減
+      export PYTHONDONTWRITEBYTECODE=1
+      export PYTHONUNBUFFERED=1
+      
+    # リソース設定（無料プランの制限内）
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+      
+    # 環境固有設定
+    region: oregon  # またはsingapore（アジア圏の場合）
