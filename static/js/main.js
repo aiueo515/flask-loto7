@@ -1,4 +1,328 @@
 /**
+ * モバイルデバッグシステム
+ * iPhone上で直接デバッグ情報を確認できる仕組み
+ */
+
+// デバッグコンソールをページ内に作成
+class MobileDebugConsole {
+    constructor() {
+        this.logs = [];
+        this.maxLogs = 100;
+        this.createDebugPanel();
+        this.interceptConsoleMethods();
+        this.interceptErrors();
+    }
+    
+    createDebugPanel() {
+        // デバッグパネルのHTML
+        const debugHTML = `
+            <div id="mobile-debug-panel" style="
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                height: 200px;
+                background: rgba(0, 0, 0, 0.9);
+                color: #fff;
+                font-family: monospace;
+                font-size: 11px;
+                z-index: 99999;
+                display: none;
+                flex-direction: column;
+            ">
+                <div style="
+                    padding: 5px 10px;
+                    background: #333;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    border-bottom: 1px solid #555;
+                ">
+                    <span>📱 デバッグコンソール</span>
+                    <div>
+                        <button onclick="mobileDebug.clear()" style="
+                            background: #555;
+                            color: #fff;
+                            border: none;
+                            padding: 2px 8px;
+                            margin-right: 5px;
+                            border-radius: 3px;
+                        ">クリア</button>
+                        <button onclick="mobileDebug.hide()" style="
+                            background: #d32f2f;
+                            color: #fff;
+                            border: none;
+                            padding: 2px 8px;
+                            border-radius: 3px;
+                        ">閉じる</button>
+                    </div>
+                </div>
+                <div id="debug-logs" style="
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 10px;
+                    -webkit-overflow-scrolling: touch;
+                "></div>
+            </div>
+            
+            <button id="debug-toggle-btn" onclick="mobileDebug.toggle()" style="
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                width: 50px;
+                height: 50px;
+                background: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                font-size: 20px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+                z-index: 99998;
+            ">🐛</button>
+        `;
+        
+        // DOMに追加
+        const div = document.createElement('div');
+        div.innerHTML = debugHTML;
+        document.body.appendChild(div);
+        
+        this.panel = document.getElementById('mobile-debug-panel');
+        this.logsContainer = document.getElementById('debug-logs');
+    }
+    
+    interceptConsoleMethods() {
+        // 元のconsoleメソッドを保存
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        const originalInfo = console.info;
+        
+        // console.logをインターセプト
+        console.log = (...args) => {
+            originalLog.apply(console, args);
+            this.addLog('log', args);
+        };
+        
+        // console.errorをインターセプト
+        console.error = (...args) => {
+            originalError.apply(console, args);
+            this.addLog('error', args);
+        };
+        
+        // console.warnをインターセプト
+        console.warn = (...args) => {
+            originalWarn.apply(console, args);
+            this.addLog('warn', args);
+        };
+        
+        // console.infoをインターセプト
+        console.info = (...args) => {
+            originalInfo.apply(console, args);
+            this.addLog('info', args);
+        };
+    }
+    
+    interceptErrors() {
+        // グローバルエラーをキャッチ
+        window.addEventListener('error', (event) => {
+            this.addLog('error', [
+                `Error: ${event.message}`,
+                `File: ${event.filename}`,
+                `Line: ${event.lineno}:${event.colno}`
+            ]);
+        });
+        
+        // Promiseの拒否をキャッチ
+        window.addEventListener('unhandledrejection', (event) => {
+            this.addLog('error', ['Unhandled Promise Rejection:', event.reason]);
+        });
+    }
+    
+    addLog(type, args) {
+        const timestamp = new Date().toLocaleTimeString('ja-JP');
+        const message = args.map(arg => {
+            if (typeof arg === 'object') {
+                try {
+                    return JSON.stringify(arg, null, 2);
+                } catch (e) {
+                    return String(arg);
+                }
+            }
+            return String(arg);
+        }).join(' ');
+        
+        const log = { timestamp, type, message };
+        this.logs.push(log);
+        
+        // 最大ログ数を超えたら古いものを削除
+        if (this.logs.length > this.maxLogs) {
+            this.logs.shift();
+        }
+        
+        this.updateDisplay();
+    }
+    
+    updateDisplay() {
+        if (!this.logsContainer) return;
+        
+        const html = this.logs.map(log => {
+            const color = {
+                log: '#fff',
+                error: '#ff5252',
+                warn: '#ff9800',
+                info: '#03a9f4'
+            }[log.type] || '#fff';
+            
+            return `
+                <div style="margin-bottom: 5px; color: ${color};">
+                    <span style="color: #888;">[${log.timestamp}]</span>
+                    <span style="color: ${color};">[${log.type.toUpperCase()}]</span>
+                    <span>${this.escapeHtml(log.message)}</span>
+                </div>
+            `;
+        }).join('');
+        
+        this.logsContainer.innerHTML = html;
+        this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
+    }
+    
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    show() {
+        this.panel.style.display = 'flex';
+    }
+    
+    hide() {
+        this.panel.style.display = 'none';
+    }
+    
+    toggle() {
+        if (this.panel.style.display === 'none') {
+            this.show();
+        } else {
+            this.hide();
+        }
+    }
+    
+    clear() {
+        this.logs = [];
+        this.updateDisplay();
+    }
+}
+
+// グローバルに公開
+window.mobileDebug = new MobileDebugConsole();
+
+// システム状態チェッカー
+class SystemStatusChecker {
+    constructor() {
+        this.checkInterval = null;
+    }
+    
+    async runDiagnostics() {
+        console.log('=== システム診断開始 ===');
+        
+        // 1. API接続テスト
+        console.log('1. API接続テスト...');
+        try {
+            const response = await fetch('/?api=true');
+            const data = await response.json();
+            console.log('✅ API接続: OK', data);
+        } catch (error) {
+            console.error('❌ API接続: エラー', error.message);
+        }
+        
+        // 2. システム初期化状態
+        console.log('2. システム初期化状態...');
+        try {
+            const status = await window.api.getDetailedStatus();
+            console.log('システム状態:', status);
+            
+            if (status.status === 'error') {
+                console.error('❌ システムエラー:', status.message);
+            } else {
+                console.log('✅ システム初期化: OK');
+            }
+        } catch (error) {
+            console.error('❌ システム状態取得エラー:', error.message);
+        }
+        
+        // 3. タブ切り替え状態
+        console.log('3. タブ切り替え状態...');
+        if (window.ui) {
+            console.log('現在のタブ:', window.ui.currentTab);
+            console.log('読み込み中:', window.ui.isLoadingTab);
+        }
+        
+        // 4. メモリ使用量
+        if (performance.memory) {
+            const memoryMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+            console.log(`4. メモリ使用量: ${memoryMB} MB`);
+        }
+        
+        console.log('=== システム診断完了 ===');
+    }
+    
+    startMonitoring() {
+        // 5秒ごとにタブ切り替え状態を監視
+        this.checkInterval = setInterval(() => {
+            if (window.ui) {
+                console.log(`[モニター] タブ: ${window.ui.currentTab}, 読み込み中: ${window.ui.isLoadingTab}`);
+            }
+        }, 5000);
+    }
+    
+    stopMonitoring() {
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+            this.checkInterval = null;
+        }
+    }
+}
+
+// システム診断ツールを公開
+window.systemChecker = new SystemStatusChecker();
+
+// 診断ボタンを追加
+setTimeout(() => {
+    const diagnosticBtn = document.createElement('button');
+    diagnosticBtn.innerHTML = '🔍';
+    diagnosticBtn.style.cssText = `
+        position: fixed;
+        bottom: 80px;
+        right: 20px;
+        width: 50px;
+        height: 50px;
+        background: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        font-size: 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        z-index: 99997;
+    `;
+    diagnosticBtn.onclick = () => window.systemChecker.runDiagnostics();
+    document.body.appendChild(diagnosticBtn);
+}, 1000);
+
+// 初期ログ
+console.log('📱 モバイルデバッグシステムが起動しました');
+console.log('🐛 ボタンでデバッグコンソールを開けます');
+console.log('🔍 ボタンでシステム診断を実行できます');
+
+// エラーが発生したら自動でデバッグパネルを開く
+window.addEventListener('error', () => {
+    setTimeout(() => {
+        window.mobileDebug.show();
+    }, 100);
+});
+
+
+/**
  * メインアプリケーション - ロト7予測PWA
  * アプリ全体の初期化と制御
  */
