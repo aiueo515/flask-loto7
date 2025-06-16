@@ -1487,7 +1487,7 @@ Object.assign(UI.prototype, {
     }
 });
 
-// DOMContentLoaded イベント（エラーハンドリング強化）
+// DOMContentLoaded イベント（段階的初期化対応）
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('🚀 DOM読み込み完了');
     
@@ -1496,8 +1496,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     if (apiReady) {
         try {
-            // アプリケーション初期化
-            await window.app.initialize();
+            // 段階的初期化の実行
+            if (window.ui && typeof window.ui.initializeSystemProgressively === 'function') {
+                console.log('🚀 段階的システム初期化を開始...');
+                await window.ui.initializeSystemProgressively();
+                console.log('✅ 段階的初期化完了');
+            } else {
+                // フォールバック：通常の初期化
+                console.log('🚀 通常のアプリケーション初期化を開始...');
+                await window.app.initialize();
+                console.log('✅ 通常初期化完了');
+            }
             
         } catch (error) {
             console.error('❌ 初期化エラー:', error);
