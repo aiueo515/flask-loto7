@@ -472,6 +472,87 @@ class MobileOptimizer {
             }
         });
     }
+
+// mobile.js の setupPullToRefresh メソッドの後に以下の関数を追加
+
+    /**
+     * プルトゥリフレッシュの移動処理
+     */
+    MobileOptimizer.prototype.handlePullToRefreshMove = function(event) {
+        if (!this.isPullToRefreshActive) return;
+    
+        const currentY = event.touches[0].clientY;
+        const pullDistance = currentY - this.startY;
+    
+        if (pullDistance > 0 && pullDistance < this.pullThreshold * 2) {
+            this.updatePullToRefresh(pullDistance);
+        
+            if (pullDistance > 20) {
+                event.preventDefault();
+            }
+        }
+    };
+
+/**
+ * プルトゥリフレッシュの更新
+ */
+MobileOptimizer.prototype.updatePullToRefresh = function(distance) {
+    // プルトゥリフレッシュのインジケーターを更新
+    let indicator = document.querySelector('.pull-to-refresh-indicator');
+    
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'pull-to-refresh-indicator';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%) translateY(${Math.min(distance - 20, 60)}px);
+            width: 40px;
+            height: 40px;
+            background: white;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: transform 0.2s;
+        `;
+        indicator.innerHTML = '↓';
+        document.body.appendChild(indicator);
+    } else {
+        indicator.style.transform = `translateX(-50%) translateY(${Math.min(distance - 20, 60)}px)`;
+    }
+    
+    // しきい値を超えたら矢印を回転
+    if (distance > this.pullThreshold) {
+        indicator.style.transform += ' rotate(180deg)';
+    }
+};
+
+/**
+ * プルトゥリフレッシュの終了処理
+ */
+MobileOptimizer.prototype.handlePullToRefreshEnd = function() {
+    if (!this.isPullToRefreshActive) return;
+    
+    const indicator = document.querySelector('.pull-to-refresh-indicator');
+    if (indicator) {
+        indicator.remove();
+    }
+    
+    // リフレッシュ実行
+    if (this.currentPullDistance > this.pullThreshold) {
+        if (window.ui) {
+            window.ui.refreshCurrentTab();
+        }
+    }
+    
+    this.isPullToRefreshActive = false;
+    this.currentPullDistance = 0;
+};
+
     
     /**
      * プルトゥリフレッシュ更新

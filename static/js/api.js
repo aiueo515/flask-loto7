@@ -38,80 +38,93 @@ class API {
      * @param {Object} options - fetch options
      * @returns {Promise<Object>} レスポンス
      */
-    async request(endpoint, options = {}) {
-        // オフライン時の処理
-        if (!this.isOnline && !options.allowOffline) {
-            throw new Error('オフライン状態です。インターネット接続を確認してください。');
+
+// api.js の request メソッドを以下に置き換え
+
+API.prototype.request = async function(endpoint, options = {}) {
+    // オフライン時の処理
+    if (!this.isOnline && !options.allowOffline) {
+        throw new Error('オフライン状態です。インターネット接続を確認してください。');
+    }
+    
+    const requestId = ++this.requestCount;
+    const url = `${this.baseURL}${endpoint}`;
+    
+    // デフォルトオプション
+    const defaultOptions = {
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        },
+        credentials: 'same-origin'
+    };
+    
+    // オプションをマージ
+    const finalOptions = {
+        ...defaultOptions,
+        ...options,
+        headers: {
+            ...defaultOptions.headers,
+            ...(options.headers || {})
         }
+    };
+    
+    try {
+        console.log(`[API ${requestId}] ${finalOptions.method || 'GET'} ${url}`);
         
-        const requestId = ++this.requestCount;
-        const url = `${this.baseURL}${endpoint}`;
+        const response = await fetch(url, finalOptions);
         
-        // デフォルトオプション
-        const defaultOptions = {
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            credentials: 'same-origin'
-        };
-        
-        // オプションをマージ
-        const finalOptions = {
-            ...defaultOptions,
-            ...options,
-            headers: {
-                ...defaultOptions.headers,
-                ...(options.headers || {})
-            }
-        };
-        
-        try {
-            console.log(`[API ${requestId}] ${finalOptions.method || 'GET'} ${url}`);
+        // レスポンスの検証
+        if (!response.ok) {
+            let errorData;
+            let errorMessage;
             
-            const response = await fetch(url, finalOptions);
-            
-            // レスポンスの検証
-            if (!response.ok) {
-                const errorText = await response.text();
-                let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-                
-                try {
-                    const errorData = JSON.parse(errorText);
-                    if (errorData.message) {
-                        errorMessage = errorData.message;
-                    }
-                } catch (e) {
-                    // JSONパースに失敗した場合はHTTPステータスを使用
+            try {
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    errorData = await response.json();
+                    errorMessage = errorData.message || errorData.error || `API Error: ${response.status} ${response.statusText}`;
+                } else {
+                    const text = await response.text();
+                    errorMessage = text || `API Error: ${response.status} ${response.statusText}`;
                 }
-                
-                throw new Error(errorMessage);
+            } catch (e) {
+                errorMessage = `API Error: ${response.status} ${response.statusText}`;
             }
             
-            // JSONレスポンスの解析
-            const contentType = response.headers.get('content-type');
-            let data;
+            console.error(`[API ${requestId}] Error:`, errorMessage);
+            console.error(`[API ${requestId}] Response Status:`, response.status);
+            console.error(`[API ${requestId}] Response Headers:`, Object.fromEntries(response.headers.entries()));
             
-            if (contentType && contentType.includes('application/json')) {
-                data = await response.json();
-            } else {
-                data = await response.text();
-            }
-            
-            console.log(`[API ${requestId}] Success:`, data);
-            return data;
-            
-        } catch (error) {
-            console.error(`[API ${requestId}] Error:`, error);
-            
-            // ネットワークエラーの場合
-            if (error.name === 'TypeError' && error.message.includes('fetch')) {
-                throw new Error('ネットワークエラーが発生しました。接続を確認してください。');
-            }
-            
+            const error = new Error(errorMessage);
+            error.status = response.status;
+            error.data = errorData;
             throw error;
         }
+        
+        // レスポンスをパース
+        const data = await response.json();
+        console.log(`[API ${requestId}] Success:`, data);
+        
+        return data;
+        
+    } catch (error) {
+        console.error(`[API ${requestId}] Request failed:`, error);
+        console.error(`[API ${requestId}] Error details:`, {
+            message: error.message,
+            status: error.status,
+            stack: error.stack
+        });
+        
+        // ネットワークエラーかタイムアウト
+        if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
+            throw new Error('ネットワークエラー: サーバーに接続できません');
+        }
+        
+        throw error;
     }
+};
+
     
     /**
      * GETリクエスト
