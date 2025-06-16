@@ -40,41 +40,63 @@ prediction_system = None
 file_manager = None
 
 def init_system():
-    """システム初期化"""
+    """システム初期化（デバッグ版）"""
     global prediction_system, file_manager
     try:
-        file_manager = FileManager()
-        prediction_system = AutoFetchEnsembleLoto7()
+        logger.info("=== システム初期化開始 ===")
         
-        # ファイル管理器を設定（重要）
+        # ファイル管理器の初期化
+        logger.info("ファイル管理器を初期化中...")
+        file_manager = FileManager()
+        logger.info("ファイル管理器の初期化完了")
+        
+        # 予測システムの初期化
+        logger.info("予測システムを初期化中...")
+        prediction_system = AutoFetchEnsembleLoto7()
+        logger.info("予測システムの初期化完了")
+        
+        # ファイル管理器を設定
+        logger.info("ファイル管理器を予測システムに設定中...")
         prediction_system.set_file_manager(file_manager)
+        logger.info("ファイル管理器の設定完了")
         
         # 保存済みモデルがあれば読み込み
         if file_manager.model_exists():
-            prediction_system.load_models()
-            logger.info("保存済みモデルを読み込みました")
+            logger.info("保存済みモデルを読み込み中...")
+            try:
+                success = prediction_system.load_models()
+                if success:
+                    logger.info("保存済みモデルの読み込み成功")
+                else:
+                    logger.warning("保存済みモデルの読み込み失敗")
+            except Exception as e:
+                logger.error(f"モデル読み込みエラー: {str(e)}")
+                logger.error(traceback.format_exc())
+        else:
+            logger.info("保存済みモデルが存在しません")
         
         # 予測履歴があれば読み込み
         if file_manager.history_exists():
-            prediction_system.history.load_from_csv()
-            logger.info("予測履歴を読み込みました")
+            logger.info("予測履歴を読み込み中...")
+            try:
+                success = prediction_system.history.load_from_csv()
+                if success:
+                    logger.info("予測履歴の読み込み成功")
+                else:
+                    logger.warning("予測履歴の読み込み失敗")
+            except Exception as e:
+                logger.error(f"履歴読み込みエラー: {str(e)}")
+                logger.error(traceback.format_exc())
+        else:
+            logger.info("予測履歴が存在しません")
         
+        logger.info("=== システム初期化完了 ===")
         return True
+        
     except Exception as e:
-        logger.error(f"システム初期化エラー: {e}")
+        logger.error(f"システム初期化エラー: {str(e)}")
+        logger.error(f"エラー詳細:\n{traceback.format_exc()}")
         return False
-
-def create_error_response(message, status_code=500, details=None):
-    """統一エラーレスポンス"""
-    response = {
-        "status": "error",
-        "message": message,
-        "timestamp": datetime.now().isoformat()
-    }
-    if details:
-        response["details"] = details
-    
-    return jsonify(response), status_code
 
 def create_success_response(data, message="Success"):
     """統一成功レスポンス"""
