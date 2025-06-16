@@ -324,5 +324,9 @@ class API {
 // デバッグ: APIクラスが定義されたことを確認
 console.log('API class defined:', typeof API);
 
-// グローバルに公開（念のため）
+// 🔥 即座にグローバル定義（ファイル読み込み順序に関係なく動作）
 window.API = API;
+window.api = new API();
+
+console.log('✅ API クラス定義完了:', typeof API);
+console.log('✅ グローバルAPI インスタンス作成完了:', typeof window.api);

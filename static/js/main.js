@@ -327,28 +327,51 @@ window.addEventListener('error', () => {
  * アプリ全体の初期化と制御
  */
 
-// APIクラスが読み込まれているか確認
-if (typeof API === 'undefined') {
-    console.error('APIクラスが定義されていません。api.jsが正しく読み込まれているか確認してください。');
-}
-
-// グローバルAPIインスタンス（APIクラスが存在する場合のみ作成）
-if (typeof API !== 'undefined') {
-    window.api = new API();
-} else {
-    console.error('APIクラスが見つからないため、window.apiを作成できません');
-    // ダミーAPIオブジェクトを作成（エラー回避用）
-    window.api = {
-        getSystemStatus: async () => ({ status: 'error', message: 'API not loaded' }),
-        getDetailedStatus: async () => ({ status: 'error', message: 'API not loaded' }),
-        getPrediction: async () => ({ status: 'error', message: 'API not loaded' }),
-        getPredictionHistory: async () => ({ status: 'error', message: 'API not loaded' }),
-        getRecentResults: async () => ({ status: 'error', message: 'API not loaded' }),
-        getPredictionAnalysis: async () => ({ status: 'error', message: 'API not loaded' }),
-        trainModel: async () => ({ status: 'error', message: 'API not loaded' }),
-        downloadFile: async () => { throw new Error('API not loaded'); },
-        uploadFile: async () => ({ status: 'error', message: 'API not loaded' })
-    };
+// APIクラスの読み込み確認（エラーハンドリング強化）
+function checkAPIAvailability() {
+    let retryCount = 0;
+    const maxRetries = 50; // 5秒待機
+    
+    return new Promise((resolve) => {
+        function checkAPI() {
+            if (typeof API !== 'undefined' && window.api) {
+                console.log('✅ API クラスが正常に読み込まれました');
+                resolve(true);
+                return;
+            }
+            
+            retryCount++;
+            if (retryCount >= maxRetries) {
+                console.error('❌ APIクラスの読み込みに失敗しました（5秒経過）');
+                
+                // 明確なエラー表示
+                document.body.innerHTML = `
+                    <div style="padding: 20px; text-align: center; font-family: sans-serif;">
+                        <h2>🔧 システム読み込みエラー</h2>
+                        <p>/static/js/api.js の読み込みに失敗しました。</p>
+                        <button onclick="location.reload()" 
+                                style="padding: 10px 20px; font-size: 16px; cursor: pointer;">
+                            再読み込み
+                        </button>
+                        <details style="margin-top: 20px;">
+                            <summary>デバッグ情報</summary>
+                            <pre>typeof API: ${typeof API}
+window.api: ${typeof window.api}
+ユーザーエージェント: ${navigator.userAgent}</pre>
+                        </details>
+                    </div>
+                `;
+                
+                resolve(false);
+                return;
+            }
+            
+            console.log(`🔄 API読み込み確認中... (${retryCount}/50)`);
+            setTimeout(checkAPI, 100);
+        }
+        
+        checkAPI();
+    });
 }
 
 /**
@@ -1464,17 +1487,23 @@ Object.assign(UI.prototype, {
     }
 });
 
-// DOMContentLoaded イベント
+// DOMContentLoaded イベント（エラーハンドリング強化）
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('DOM読み込み完了');
+    console.log('🚀 DOM読み込み完了');
     
-    try {
-        // アプリケーション初期化
-        await window.app.initialize();
-        
-    } catch (error) {
-        console.error('初期化エラー:', error);
+    // API読み込み確認
+    const apiReady = await checkAPIAvailability();
+    
+    if (apiReady) {
+        try {
+            // アプリケーション初期化
+            await window.app.initialize();
+            
+        } catch (error) {
+            console.error('❌ 初期化エラー:', error);
+        }
     }
+    // API読み込み失敗時は何もしない（エラー画面が既に表示済み）
 });
 
 // ページ可視性の変更を監視
