@@ -327,8 +327,29 @@ window.addEventListener('error', () => {
  * アプリ全体の初期化と制御
  */
 
-// グローバルAPIインスタンス
-window.api = new API();
+// APIクラスが読み込まれているか確認
+if (typeof API === 'undefined') {
+    console.error('APIクラスが定義されていません。api.jsが正しく読み込まれているか確認してください。');
+}
+
+// グローバルAPIインスタンス（APIクラスが存在する場合のみ作成）
+if (typeof API !== 'undefined') {
+    window.api = new API();
+} else {
+    console.error('APIクラスが見つからないため、window.apiを作成できません');
+    // ダミーAPIオブジェクトを作成（エラー回避用）
+    window.api = {
+        getSystemStatus: async () => ({ status: 'error', message: 'API not loaded' }),
+        getDetailedStatus: async () => ({ status: 'error', message: 'API not loaded' }),
+        getPrediction: async () => ({ status: 'error', message: 'API not loaded' }),
+        getPredictionHistory: async () => ({ status: 'error', message: 'API not loaded' }),
+        getRecentResults: async () => ({ status: 'error', message: 'API not loaded' }),
+        getPredictionAnalysis: async () => ({ status: 'error', message: 'API not loaded' }),
+        trainModel: async () => ({ status: 'error', message: 'API not loaded' }),
+        downloadFile: async () => { throw new Error('API not loaded'); },
+        uploadFile: async () => ({ status: 'error', message: 'API not loaded' })
+    };
+}
 
 /**
  * アプリケーションクラス
@@ -342,35 +363,42 @@ class App {
     /**
      * アプリケーション初期化
      */
-    async initialize() {
-        try {
-            console.log('アプリケーション初期化開始...');
-            
-            // PWA登録
-            if (window.pwa) {
-                await window.pwa.init();
-            }
-            
-            // システム状態確認（初回のみ実行）
-            if (!this.initialized) {
-                await this.checkSystemStatus();
-                this.initialized = true;
-            }
-            
-            // 初期タブの読み込み（初回のみ実行）
-            if (window.ui) {
-                await window.ui.initTab('predict');
-            }
-            
-            console.log('アプリケーション初期化完了');
-            
-        } catch (error) {
-            console.error('アプリケーション初期化エラー:', error);
-            if (window.ui) {
-                window.ui.showToast('システム初期化に失敗しました', 'error');
-            }
+
+async initialize() {
+    try {
+        console.log('アプリケーション初期化開始...');
+        
+        // APIの存在確認を追加
+        if (!window.api || window.api.getSystemStatus === undefined) {
+            throw new Error('API が正しく初期化されていません');
+        }
+        
+        // PWA登録
+        if (window.pwa) {
+            await window.pwa.init();
+        }
+        
+        // システム状態確認（初回のみ実行）
+        if (!this.initialized) {
+            await this.checkSystemStatus();
+            this.initialized = true;
+        }
+        
+        // 初期タブの読み込み（初回のみ実行）
+        if (window.ui) {
+            await window.ui.initTab('predict');
+        }
+        
+        console.log('アプリケーション初期化完了');
+        
+    } catch (error) {
+        console.error('アプリケーション初期化エラー:', error);
+        if (window.ui) {
+            window.ui.showToast('システム初期化に失敗しました: ' + error.message, 'error');
         }
     }
+}
+
     
     /**
      * システム状態確認

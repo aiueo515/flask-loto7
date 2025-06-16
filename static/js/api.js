@@ -3,11 +3,19 @@
  * バックエンドAPIとの通信を管理
  */
 
+// デバッグ: api.js が読み込まれたことを確認
+console.log('api.js loading...');
+
 class API {
     constructor() {
         this.baseURL = window.location.origin;
         this.isOnline = navigator.onLine;
         this.requestCount = 0;
+
+        // この行を追加
+        console.log('API class initialized with baseURL:', this.baseURL);
+    
+
         
         // オンライン/オフライン状態の監視
         window.addEventListener('online', () => {
@@ -32,16 +40,19 @@ class API {
         }
     }
     
+
     /**
      * APIリクエストの共通処理
      * @param {string} endpoint - エンドポイント
      * @param {Object} options - fetch options
      * @returns {Promise<Object>} レスポンス
      */
+    async request(endpoint, options = {}) {  
+        // オフライン時の処理
+        if (!this.isOnline && !options.allowOffline) {
+            throw new Error('オフライン状態です。インターネット接続を確認してください。');
+        }
 
-// api.js の request メソッドを以下に置き換え
-
-API.prototype.request = async function(endpoint, options = {}) {
     // オフライン時の処理
     if (!this.isOnline && !options.allowOffline) {
         throw new Error('オフライン状態です。インターネット接続を確認してください。');
@@ -67,7 +78,7 @@ API.prototype.request = async function(endpoint, options = {}) {
             ...defaultOptions.headers,
             ...(options.headers || {})
         }
-    };
+    }
     
     try {
         console.log(`[API ${requestId}] ${finalOptions.method || 'GET'} ${url}`);
@@ -310,5 +321,8 @@ API.prototype.request = async function(endpoint, options = {}) {
     }
 }
 
-// グローバルAPIインスタンス
-window.api = new API();
+// デバッグ: APIクラスが定義されたことを確認
+console.log('API class defined:', typeof API);
+
+// グローバルに公開（念のため）
+window.API = API;
