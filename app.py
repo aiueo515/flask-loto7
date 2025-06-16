@@ -164,16 +164,49 @@ def predict():
     """20セットの予測を返す（永続化対応）"""
     try:
         if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
+            logger.error("予測システムが初期化されていません")
+            return create_error_response("システムが初期化されていません", 500, {
+                "details": "prediction_system is None",
+                "suggestion": "システムの再起動が必要です"
+            })
+        
+        # データ取得チェック
+        if not hasattr(prediction_system, 'data_fetcher'):
+            logger.error("data_fetcherが存在しません")
+            return create_error_response("システム構成エラー", 500, {
+                "details": "data_fetcher not found",
+                "suggestion": "システムの再初期化が必要です"
+            })
         
         # データ取得
-        if not prediction_system.data_fetcher.fetch_latest_data():
-            return create_error_response("最新データの取得に失敗しました", 500)
+        try:
+            if not prediction_system.data_fetcher.fetch_latest_data():
+                logger.error("データ取得に失敗しました")
+                return create_error_response("最新データの取得に失敗しました", 500, {
+                    "details": "fetch_latest_data returned False",
+                    "suggestion": "インターネット接続を確認してください"
+                })
+        except Exception as e:
+            logger.error(f"データ取得エラー: {str(e)}")
+            return create_error_response("データ取得中にエラーが発生しました", 500, {
+                "details": str(e),
+                "error_type": type(e).__name__
+            })
         
         # 次回開催回情報取得
         next_info = prediction_system.data_fetcher.get_next_round_info()
         if not next_info:
-            return create_error_response("次回開催回情報の取得に失敗しました", 500)
+            logger.error("次回開催回情報の取得に失敗しました")
+            return create_error_response("次回開催回情報の取得に失敗しました", 500, {
+                "details": "get_next_round_info returned None"
+            })
+        
+        # 履歴の初期化チェック
+        if not hasattr(prediction_system, 'history'):
+            logger.error("historyが存在しません")
+            return create_error_response("システム構成エラー", 500, {
+                "details": "history not found"
+            })
         
         # 既存予測のチェック
         existing_prediction = prediction_system.history.find_prediction_by_round(next_info['next_round'])
@@ -200,29 +233,58 @@ def predict():
             # 新規予測生成
             # モデルが学習されていない場合は学習実行
             if not prediction_system.trained_models:
-                training_success = prediction_system.auto_setup_and_train()
-                if not training_success:
-                    return create_error_response("モデル学習に失敗しました", 500)
+                logger.info("学習済みモデルがありません。自動セットアップを開始します...")
+                try:
+                    training_success = prediction_system.auto_setup_and_train()
+                    if not training_success:
+                        logger.error("自動セットアップに失敗しました")
+                        return create_error_response("モデル学習に失敗しました", 500, {
+                            "details": "auto_setup_and_train returned False"
+                        })
+                except Exception as e:
+                    logger.error(f"学習エラー: {str(e)}")
+                    return create_error_response("モデル学習中にエラーが発生しました", 500, {
+                        "details": str(e),
+                        "error_type": type(e).__name__
+                    })
             
             # 予測生成
-            predictions, next_info = prediction_system.predict_next_round(20, use_learning=True)
-            
-            if not predictions:
-                return create_error_response("予測生成に失敗しました", 500)
+            try:
+                predictions, next_info_updated = prediction_system.predict_next_round(20, use_learning=True)
+                
+                if not predictions:
+                    logger.error("予測が空です")
+                    return create_error_response("予測生成に失敗しました", 500, {
+                        "details": "predictions is empty"
+                    })
+                
+                # next_infoを更新（predict_next_roundから返される情報を使用）
+                if next_info_updated:
+                    next_info = next_info_updated
+                    
+            except Exception as e:
+                logger.error(f"予測生成エラー: {str(e)}")
+                return create_error_response("予測生成中にエラーが発生しました", 500, {
+                    "details": str(e),
+                    "error_type": type(e).__name__
+                })
             
             # 前回結果の分析（可能な場合）
             previous_results = None
             if next_info['latest_round'] > 1:
-                previous_prediction = prediction_system.history.find_prediction_by_round(next_info['latest_round'])
-                if previous_prediction and previous_prediction.get('verified'):
-                    previous_results = {
-                        "round": next_info['latest_round'],
-                        "predictions": previous_prediction['predictions'],
-                        "actual": previous_prediction['actual'],
-                        "matches": previous_prediction['matches'],
-                        "avg_matches": sum(previous_prediction['matches']) / len(previous_prediction['matches']) if previous_prediction['matches'] else 0,
-                        "max_matches": max(previous_prediction['matches']) if previous_prediction['matches'] else 0
-                    }
+                try:
+                    previous_prediction = prediction_system.history.find_prediction_by_round(next_info['latest_round'])
+                    if previous_prediction and previous_prediction.get('verified'):
+                        previous_results = {
+                            "round": next_info['latest_round'],
+                            "predictions": previous_prediction['predictions'],
+                            "actual": previous_prediction['actual'],
+                            "matches": previous_prediction['matches'],
+                            "avg_matches": sum(previous_prediction['matches']) / len(previous_prediction['matches']) if previous_prediction['matches'] else 0,
+                            "max_matches": max(previous_prediction['matches']) if previous_prediction['matches'] else 0
+                        }
+                except Exception as e:
+                    logger.warning(f"前回結果の取得エラー: {str(e)}")
             
             response_data = {
                 "round": next_info['next_round'],
