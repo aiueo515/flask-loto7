@@ -429,161 +429,117 @@ class MobileOptimizer {
         }
     }
     
-    /**
+
+/**
      * プルトゥリフレッシュの設定
      */
     setupPullToRefresh() {
         this.isPullToRefreshActive = false;
         this.pullThreshold = 80;
-        
-        let startY = 0;
-        let currentY = 0;
+        this.startY = 0;
+        this.currentPullDistance = 0;
         
         document.addEventListener('touchstart', (event) => {
             if (window.pageYOffset === 0) {
-                startY = event.touches[0].clientY;
+                this.startY = event.touches[0].clientY;
                 this.isPullToRefreshActive = true;
             }
         }, { passive: true });
         
         document.addEventListener('touchmove', (event) => {
             if (this.isPullToRefreshActive) {
-                currentY = event.touches[0].clientY;
-                const pullDistance = currentY - startY;
-                
-                if (pullDistance > 0) {
-                    this.updatePullToRefresh(pullDistance);
-                    
-                    if (pullDistance > 20) {
-                        event.preventDefault();
-                    }
-                }
+                this.handlePullToRefreshMove(event);
             }
         });
         
         document.addEventListener('touchend', () => {
             if (this.isPullToRefreshActive) {
-                const pullDistance = currentY - startY;
-                if (pullDistance > this.pullThreshold) {
-                    this.triggerRefresh();
-                }
-                this.resetPullToRefresh();
-                this.isPullToRefreshActive = false;
+                this.handlePullToRefreshEnd();
             }
         });
     }
 
-// mobile.js の setupPullToRefresh メソッドの後に以下の関数を追加
+// setupPullToRefresh() メソッドの後に以下のメソッドを追加
 
     /**
      * プルトゥリフレッシュの移動処理
      */
-    MobileOptimizer.prototype.handlePullToRefreshMove = function(event) {
+    handlePullToRefreshMove(event) {
         if (!this.isPullToRefreshActive) return;
-    
+        
         const currentY = event.touches[0].clientY;
         const pullDistance = currentY - this.startY;
-    
+        
         if (pullDistance > 0 && pullDistance < this.pullThreshold * 2) {
             this.updatePullToRefresh(pullDistance);
-        
+            
             if (pullDistance > 20) {
                 event.preventDefault();
             }
         }
-    };
-
-/**
- * プルトゥリフレッシュの更新
- */
-MobileOptimizer.prototype.updatePullToRefresh = function(distance) {
-    // プルトゥリフレッシュのインジケーターを更新
-    let indicator = document.querySelector('.pull-to-refresh-indicator');
-    
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.className = 'pull-to-refresh-indicator';
-        indicator.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 50%;
-            transform: translateX(-50%) translateY(${Math.min(distance - 20, 60)}px);
-            width: 40px;
-            height: 40px;
-            background: white;
-            border-radius: 50%;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            transition: transform 0.2s;
-        `;
-        indicator.innerHTML = '↓';
-        document.body.appendChild(indicator);
-    } else {
-        indicator.style.transform = `translateX(-50%) translateY(${Math.min(distance - 20, 60)}px)`;
     }
-    
-    // しきい値を超えたら矢印を回転
-    if (distance > this.pullThreshold) {
-        indicator.style.transform += ' rotate(180deg)';
-    }
-};
-
-/**
- * プルトゥリフレッシュの終了処理
- */
-MobileOptimizer.prototype.handlePullToRefreshEnd = function() {
-    if (!this.isPullToRefreshActive) return;
-    
-    const indicator = document.querySelector('.pull-to-refresh-indicator');
-    if (indicator) {
-        indicator.remove();
-    }
-    
-    // リフレッシュ実行
-    if (this.currentPullDistance > this.pullThreshold) {
-        if (window.ui) {
-            window.ui.refreshCurrentTab();
-        }
-    }
-    
-    this.isPullToRefreshActive = false;
-    this.currentPullDistance = 0;
-};
-
     
     /**
-     * プルトゥリフレッシュ更新
+     * プルトゥリフレッシュの更新
      */
     updatePullToRefresh(distance) {
-        const indicator = this.getPullToRefreshIndicator();
-        const progress = Math.min(distance / this.pullThreshold, 1);
+        // プルトゥリフレッシュのインジケーターを更新
+        let indicator = document.querySelector('.pull-to-refresh-indicator');
         
-        indicator.style.transform = `translateY(${Math.min(distance, this.pullThreshold)}px)`;
-        indicator.style.opacity = progress;
-        
-        if (progress >= 1) {
-            indicator.classList.add('ready');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'pull-to-refresh-indicator';
+            indicator.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 50%;
+                transform: translateX(-50%) translateY(${Math.min(distance - 20, 60)}px);
+                width: 40px;
+                height: 40px;
+                background: white;
+                border-radius: 50%;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 1000;
+                transition: transform 0.2s;
+            `;
+            indicator.innerHTML = '↓';
+            document.body.appendChild(indicator);
         } else {
-            indicator.classList.remove('ready');
+            indicator.style.transform = `translateX(-50%) translateY(${Math.min(distance - 20, 60)}px)`;
         }
+        
+        // しきい値を超えたら矢印を回転
+        if (distance > this.pullThreshold) {
+            indicator.style.transform += ' rotate(180deg)';
+        }
+        
+        // 現在の引っ張り距離を保存
+        this.currentPullDistance = distance;
     }
     
     /**
-     * プルトゥリフレッシュインジケーター取得
+     * プルトゥリフレッシュの終了処理
      */
-    getPullToRefreshIndicator() {
-        let indicator = document.getElementById('pull-to-refresh');
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.id = 'pull-to-refresh';
-            indicator.className = 'pull-to-refresh-indicator';
-            indicator.innerHTML = '🔄';
-            document.body.insertBefore(indicator, document.body.firstChild);
+    handlePullToRefreshEnd() {
+        if (!this.isPullToRefreshActive) return;
+        
+        const indicator = document.querySelector('.pull-to-refresh-indicator');
+        if (indicator) {
+            indicator.remove();
         }
-        return indicator;
+        
+        // リフレッシュ実行
+        if (this.currentPullDistance > this.pullThreshold) {
+            if (window.ui) {
+                window.ui.refreshCurrentTab();
+            }
+        }
+        
+        this.isPullToRefreshActive = false;
+        this.currentPullDistance = 0;
     }
     
     /**
@@ -600,13 +556,32 @@ MobileOptimizer.prototype.handlePullToRefreshEnd = function() {
      * プルトゥリフレッシュリセット
      */
     resetPullToRefresh() {
-        const indicator = document.getElementById('pull-to-refresh');
+        const indicator = document.querySelector('.pull-to-refresh-indicator');
         if (indicator) {
             indicator.style.transform = '';
             indicator.style.opacity = '';
             indicator.classList.remove('ready');
         }
+        
+        this.isPullToRefreshActive = false;
+        this.currentPullDistance = 0;
     }
+    
+    /**
+     * プルトゥリフレッシュインジケーター取得
+     */
+    getPullToRefreshIndicator() {
+        let indicator = document.getElementById('pull-to-refresh');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.id = 'pull-to-refresh';
+            indicator.className = 'pull-to-refresh-indicator';
+            indicator.innerHTML = '🔄';
+            document.body.insertBefore(indicator, document.body.firstChild);
+        }
+        return indicator;
+    }
+
     
     /**
      * ハプティックフィードバック
