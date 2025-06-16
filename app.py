@@ -153,6 +153,20 @@ def create_success_response(data, message="Success"):
     }
     return jsonify(response)
 
+def create_error_response(message, status_code=500, details=None):
+    """統一エラーレスポンス作成"""
+    response = {
+        "status": "error",
+        "message": message,
+        "timestamp": datetime.now().isoformat(),
+        "error_code": status_code
+    }
+    
+    if details:
+        response["details"] = details
+    
+    return jsonify(response), status_code
+
 @app.route('/', methods=['GET'])
 def index():
     """PWAメインページ"""
