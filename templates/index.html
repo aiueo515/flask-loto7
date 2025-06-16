@@ -313,12 +313,33 @@
         <!-- トースト通知がここに表示される -->
     </div>
 
-    <!-- JavaScript -->
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/ui.js"></script>
-    <script src="/static/js/main.js"></script>
-    <script src="/static/js/analysis.js"></script>
-    <script src="/static/js/pwa.js"></script>
-    <script src="/static/js/mobile.js"></script>
+<!-- JavaScript読み込み（エラー監視付き） -->
+    <script>
+        window.SCRIPT_LOAD_STATUS = {};
+        function trackScript(name, success) {
+            window.SCRIPT_LOAD_STATUS[name] = success;
+            console.log(`${success ? '✅' : '❌'} ${name} ${success ? '読み込み成功' : '読み込み失敗'}`);
+        }
+    </script>
+    
+    <script src="/static/js/api.js" 
+            onload="trackScript('api.js', true)" 
+            onerror="trackScript('api.js', false)"></script>
+    <script src="/static/js/ui.js" 
+            onload="trackScript('ui.js', true)" 
+            onerror="trackScript('ui.js', false)"></script>
+    <script src="/static/js/main.js" 
+            onload="trackScript('main.js', true)" 
+            onerror="trackScript('main.js', false)"></script>
+    <script src="/static/js/analysis.js" 
+            onload="trackScript('analysis.js', true)" 
+            onerror="trackScript('analysis.js', false)"></script>
+    <script src="/static/js/pwa.js" 
+            onload="trackScript('pwa.js', true)" 
+            onerror="trackScript('pwa.js', false)"></script>
+    <script src="/static/js/mobile.js" 
+            onload="trackScript('mobile.js', true)" 
+            onerror="trackScript('mobile.js', false)"></script>
 </body>
+
 </html>
