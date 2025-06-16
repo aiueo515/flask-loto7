@@ -488,3 +488,193 @@ class UI {
 
 // グローバルUIインスタンス
 window.ui = new UI();
+
+/**
+ * 段階的初期化機能をUIに追加
+ */
+Object.assign(UI.prototype, {
+    
+    /**
+     * 段階的システム初期化
+     */
+    async initializeSystemProgressively() {
+        console.log('🚀 段階的システム初期化開始');
+        
+        // 段階1: 基本状態確認（軽量）
+        try {
+            const basicStatus = await window.api.getSystemStatus();
+            console.log('✅ 基本システム状態確認完了');
+            
+            if (basicStatus.status === 'success') {
+                this.displayBasicSystemStatus(basicStatus.data);
+            }
+        } catch (error) {
+            console.error('❌ 基本システム状態確認エラー:', error);
+            this.showToast('システムの基本確認に失敗しました', 'warning');
+        }
+        
+        // 段階2: 重いコンポーネントの初期化は後で実行
+        this.showSystemInitializationOptions();
+    },
+    
+    /**
+     * 基本システム状態の表示
+     */
+    displayBasicSystemStatus(statusData) {
+        const indicator = document.getElementById('system-indicator');
+        const details = document.getElementById('status-details');
+        
+        if (indicator) {
+            const dot = indicator.querySelector('.dot');
+            const text = indicator.querySelector('.text');
+            
+            if (statusData.system_initialized) {
+                dot.style.backgroundColor = 'var(--warning-color)';
+                text.textContent = '基本初期化完了';
+            } else {
+                dot.style.backgroundColor = 'var(--danger-color)';
+                text.textContent = '初期化エラー';
+            }
+        }
+        
+        if (details) {
+            details.innerHTML = `
+                <div class="status-item">
+                    <div class="status-label">基本システム</div>
+                    <div class="status-value">初期化済み</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">重いコンポーネント</div>
+                    <div class="status-value">未初期化</div>
+                </div>
+                <div class="init-message">
+                    <p>📱 アプリは使用可能です</p>
+                    <p>🚀 予測機能は初回使用時に自動初期化されます</p>
+                </div>
+            `;
+        }
+    },
+    
+    /**
+     * システム初期化オプションの表示
+     */
+    showSystemInitializationOptions() {
+        const container = document.getElementById('prediction-card');
+        if (!container) return;
+        
+        container.innerHTML = `
+            <div class="card-header">
+                <h2>🎯 予測システム</h2>
+            </div>
+            
+            <div class="init-options">
+                <div class="init-status">
+                    <h3>📱 アプリ準備完了</h3>
+                    <p>基本システムの初期化が完了しました。</p>
+                    <p>予測機能は以下のタイミングで自動的に初期化されます：</p>
+                </div>
+                
+                <div class="init-methods">
+                    <div class="method-card">
+                        <h4>🎲 自動初期化</h4>
+                        <p>予測ボタンを押すと自動的に必要なコンポーネントを初期化します</p>
+                        <button id="auto-predict-btn" class="btn btn-primary">
+                            <span class="btn-icon">🎯</span>
+                            予測開始（自動初期化）
+                        </button>
+                    </div>
+                    
+                    <div class="method-card">
+                        <h4>⚡ 事前初期化</h4>
+                        <p>今すぐ重いコンポーネントを初期化することもできます</p>
+                        <button id="manual-init-btn" class="btn btn-secondary">
+                            <span class="btn-icon">🔧</span>
+                            事前初期化実行
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // イベントリスナー設定
+        document.getElementById('auto-predict-btn').addEventListener('click', () => {
+            this.getPredictionWithAutoInit();
+        });
+        
+        document.getElementById('manual-init-btn').addEventListener('click', () => {
+            this.manualInitializeHeavyComponents();
+        });
+    },
+    
+    /**
+     * 自動初期化付き予測取得
+     */
+    async getPredictionWithAutoInit() {
+        const btn = document.getElementById('auto-predict-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="btn-icon">⏳</span>初期化中...';
+        }
+        
+        try {
+            this.showToast('予測システムを初期化中...', 'info', 0);
+            
+            // 予測APIを呼び出し（内部で自動初期化される）
+            const prediction = await window.api.getPrediction();
+            
+            if (prediction.status === 'success') {
+                this.displayPrediction(prediction.data);
+                this.showToast('予測が完了しました！', 'success');
+            } else {
+                throw new Error(prediction.message || '予測の取得に失敗しました');
+            }
+            
+        } catch (error) {
+            console.error('自動初期化付き予測エラー:', error);
+            this.showToast(`予測エラー: ${error.message}`, 'error');
+            this.showSystemInitializationOptions(); // 元の画面に戻す
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="btn-icon">🎯</span>予測開始（自動初期化）';
+            }
+        }
+    },
+    
+    /**
+     * 手動で重いコンポーネントを初期化
+     */
+    async manualInitializeHeavyComponents() {
+        const btn = document.getElementById('manual-init-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="btn-icon">⏳</span>初期化中...';
+        }
+        
+        try {
+            this.showToast('重いコンポーネントを初期化中...', 'info', 0);
+            
+            // 重い初期化APIを呼び出し
+            const result = await window.api.post('/api/init_heavy', {});
+            
+            if (result.status === 'success') {
+                this.showToast('初期化が完了しました！', 'success');
+                
+                // システム状態を更新
+                await this.loadSystemStatus();
+                await this.loadPrediction();
+            } else {
+                throw new Error(result.message || '初期化に失敗しました');
+            }
+            
+        } catch (error) {
+            console.error('手動初期化エラー:', error);
+            this.showToast(`初期化エラー: ${error.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="btn-icon">🔧</span>事前初期化実行';
+            }
+        }
+    }
+});
