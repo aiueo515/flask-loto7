@@ -229,158 +229,171 @@ def service_worker():
     response.headers['Expires'] = '0'
     return response
 
+# app.py の @app.route('/api/predict', methods=['GET']) を以下に置き換え
+
 @app.route('/api/predict', methods=['GET'])
 def predict():
-    """20セットの予測を返す（自動初期化対応）"""
+    """20セットの予測を返す（初期化チェック改善版）"""
     try:
-        if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
+        # 🔧 初期化チェックを改善
+        if prediction_system is None:
+            logger.error("prediction_system is None - 緊急初期化を実行")
+            
+            # 緊急初期化を試行
+            init_success = init_system()
+            if not init_success:
+                return create_error_response("システムの緊急初期化に失敗しました", 500)
+        
+        # prediction_system が存在するか再確認
+        if prediction_system is None:
+            return create_error_response("システム初期化に失敗しました", 500)
+        
+        logger.info(f"予測API呼び出し - システム状態: prediction_system={prediction_system is not None}")
         
         # 🔥 重いコンポーネントが初期化されていない場合は自動初期化
-        if not hasattr(prediction_system, 'trained_models') or len(prediction_system.trained_models) == 0:
+        needs_init = True
+        try:
+            if hasattr(prediction_system, 'trained_models') and len(prediction_system.trained_models) > 0:
+                needs_init = False
+                logger.info("既に学習済みモデルが存在します")
+            else:
+                logger.info("学習済みモデルが見つかりません - 自動初期化が必要")
+        except Exception as e:
+            logger.warning(f"モデル確認エラー: {e}")
+            needs_init = True
+            
+        if needs_init:
             logger.info("重いコンポーネントが未初期化のため、自動初期化を実行中...")
             init_result = init_heavy_components()
             
             if init_result["status"] == "error":
                 return create_error_response(f"自動初期化に失敗しました: {init_result['message']}", 500)
+            else:
+                logger.info("自動初期化が正常に完了しました")
         
-        # 以下は既存のコードをそのまま続ける...
-
-        
-        # データ取得チェック
+        # data_fetcher の存在確認
         if not hasattr(prediction_system, 'data_fetcher'):
-            logger.error("data_fetcherが存在しません")
-            return create_error_response("システム構成エラー", 500, {
-                "details": "data_fetcher not found",
-                "suggestion": "システムの再初期化が必要です"
-            })
+            logger.error("data_fetcher が存在しません")
+            return create_error_response("システム構成エラー: data_fetcher not found", 500)
         
-        # データ取得
+        # データ取得（エラーハンドリング強化）
+        logger.info("最新データを取得中...")
         try:
             if not prediction_system.data_fetcher.fetch_latest_data():
-                logger.error("データ取得に失敗しました")
-                return create_error_response("最新データの取得に失敗しました", 500, {
-                    "details": "fetch_latest_data returned False",
-                    "suggestion": "インターネット接続を確認してください"
-                })
+                logger.warning("データ取得に失敗しましたが、キャッシュで対応を試行")
+                # キャッシュがあるかチェック
+                if prediction_system.data_fetcher.latest_data is None:
+                    return create_error_response("最新データの取得に失敗しました", 500)
         except Exception as e:
-            logger.error(f"データ取得エラー: {str(e)}")
-            return create_error_response("データ取得中にエラーが発生しました", 500, {
-                "details": str(e),
-                "error_type": type(e).__name__
-            })
+            logger.error(f"データ取得エラー: {e}")
+            return create_error_response(f"データ取得中にエラーが発生しました: {str(e)}", 500)
         
-        # 次回開催回情報取得
-        next_info = prediction_system.data_fetcher.get_next_round_info()
-        if not next_info:
-            logger.error("次回開催回情報の取得に失敗しました")
-            return create_error_response("次回開催回情報の取得に失敗しました", 500, {
-                "details": "get_next_round_info returned None"
-            })
-        
-        # 履歴の初期化チェック
-        if not hasattr(prediction_system, 'history'):
-            logger.error("historyが存在しません")
-            return create_error_response("システム構成エラー", 500, {
-                "details": "history not found"
-            })
+        # 次回情報取得
+        logger.info("次回開催回情報を取得中...")
+        try:
+            next_info = prediction_system.data_fetcher.get_next_round_info()
+            if not next_info:
+                return create_error_response("次回開催回情報の取得に失敗しました", 500)
+            
+            logger.info(f"次回開催回: 第{next_info['next_round']}回")
+        except Exception as e:
+            logger.error(f"次回情報取得エラー: {e}")
+            return create_error_response(f"次回情報取得エラー: {str(e)}", 500)
         
         # 既存予測のチェック
-        existing_prediction = prediction_system.history.find_prediction_by_round(next_info['next_round'])
-        
-        if existing_prediction:
-            # 既存予測を返す
-            response_data = {
-                "round": next_info['next_round'],
-                "predictions": existing_prediction['predictions'],
-                "is_existing": True,
-                "created_at": existing_prediction['date'],
-                "prediction_count": len(existing_prediction['predictions']),
-                "verified": existing_prediction.get('verified', False)
-            }
+        logger.info("既存予測の確認中...")
+        try:
+            existing_prediction = prediction_system.history.find_prediction_by_round(next_info['next_round'])
             
-            # 検証済みの場合は結果も含める
-            if existing_prediction.get('verified'):
-                response_data["actual_result"] = existing_prediction.get('actual')
-                response_data["matches"] = existing_prediction.get('matches')
+            if existing_prediction:
+                logger.info(f"第{next_info['next_round']}回の既存予測を発見")
+                # 既存予測を返す
+                response_data = {
+                    "round": next_info['next_round'],
+                    "predictions": existing_prediction['predictions'],
+                    "is_existing": True,
+                    "created_at": existing_prediction['date'],
+                    "prediction_count": len(existing_prediction['predictions']),
+                    "verified": existing_prediction.get('verified', False)
+                }
+                
+                if existing_prediction.get('verified'):
+                    response_data["actual_result"] = existing_prediction.get('actual')
+                    response_data["matches"] = existing_prediction.get('matches')
+                
+                return create_success_response(response_data, "既存の予測を返しました")
             
-            return create_success_response(response_data, "既存の予測を返しました")
-        
-        else:
-            # 新規予測生成
-            # モデルが学習されていない場合は学習実行
-            if not prediction_system.trained_models:
-                logger.info("学習済みモデルがありません。自動セットアップを開始します...")
+            else:
+                logger.info(f"第{next_info['next_round']}回の新規予測が必要")
+                
+                # 新規予測生成
+                if not prediction_system.trained_models:
+                    logger.info("学習済みモデルがありません。自動セットアップを開始します...")
+                    try:
+                        training_success = prediction_system.auto_setup_and_train()
+                        if not training_success:
+                            return create_error_response("モデル学習に失敗しました", 500)
+                        logger.info("自動セットアップが完了しました")
+                    except Exception as e:
+                        logger.error(f"自動セットアップエラー: {e}")
+                        return create_error_response(f"モデル学習中にエラーが発生しました: {str(e)}", 500)
+                
+                # 予測生成
+                logger.info("20セット予測を生成中...")
                 try:
-                    training_success = prediction_system.auto_setup_and_train()
-                    if not training_success:
-                        logger.error("自動セットアップに失敗しました")
-                        return create_error_response("モデル学習に失敗しました", 500, {
-                            "details": "auto_setup_and_train returned False"
-                        })
-                except Exception as e:
-                    logger.error(f"学習エラー: {str(e)}")
-                    return create_error_response("モデル学習中にエラーが発生しました", 500, {
-                        "details": str(e),
-                        "error_type": type(e).__name__
-                    })
-            
-            # 予測生成
-            try:
-                predictions, next_info_updated = prediction_system.predict_next_round(20, use_learning=True)
-                
-                if not predictions:
-                    logger.error("予測が空です")
-                    return create_error_response("予測生成に失敗しました", 500, {
-                        "details": "predictions is empty"
-                    })
-                
-                # next_infoを更新（predict_next_roundから返される情報を使用）
-                if next_info_updated:
-                    next_info = next_info_updated
+                    predictions, next_info_updated = prediction_system.predict_next_round(20, use_learning=True)
                     
-            except Exception as e:
-                logger.error(f"予測生成エラー: {str(e)}")
-                return create_error_response("予測生成中にエラーが発生しました", 500, {
-                    "details": str(e),
-                    "error_type": type(e).__name__
-                })
-            
-            # 前回結果の分析（可能な場合）
-            previous_results = None
-            if next_info['latest_round'] > 1:
-                try:
-                    previous_prediction = prediction_system.history.find_prediction_by_round(next_info['latest_round'])
-                    if previous_prediction and previous_prediction.get('verified'):
-                        previous_results = {
-                            "round": next_info['latest_round'],
-                            "predictions": previous_prediction['predictions'],
-                            "actual": previous_prediction['actual'],
-                            "matches": previous_prediction['matches'],
-                            "avg_matches": sum(previous_prediction['matches']) / len(previous_prediction['matches']) if previous_prediction['matches'] else 0,
-                            "max_matches": max(previous_prediction['matches']) if previous_prediction['matches'] else 0
-                        }
+                    if not predictions:
+                        return create_error_response("予測生成に失敗しました", 500)
+                    
+                    if next_info_updated:
+                        next_info = next_info_updated
+                    
+                    logger.info(f"予測生成完了: {len(predictions)}セット")
+                        
                 except Exception as e:
-                    logger.warning(f"前回結果の取得エラー: {str(e)}")
-            
-            response_data = {
-                "round": next_info['next_round'],
-                "predictions": predictions,
-                "is_existing": False,
-                "created_at": next_info['current_date'],
-                "prediction_count": len(predictions),
-                "model_info": {
-                    "trained_models": len(prediction_system.trained_models),
-                    "data_count": prediction_system.data_count,
-                    "model_scores": prediction_system.model_scores
-                },
-                "previous_results": previous_results
-            }
-            
-            return create_success_response(response_data, "新規予測を生成しました")
+                    logger.error(f"予測生成エラー: {e}")
+                    return create_error_response(f"予測生成中にエラーが発生しました: {str(e)}", 500)
+                
+                # 前回結果の分析
+                previous_results = None
+                if next_info['latest_round'] > 1:
+                    try:
+                        previous_prediction = prediction_system.history.find_prediction_by_round(next_info['latest_round'])
+                        if previous_prediction and previous_prediction.get('verified'):
+                            previous_results = {
+                                "round": next_info['latest_round'],
+                                "predictions": previous_prediction['predictions'],
+                                "actual": previous_prediction['actual'],
+                                "matches": previous_prediction['matches'],
+                                "avg_matches": sum(previous_prediction['matches']) / len(previous_prediction['matches']) if previous_prediction['matches'] else 0,
+                                "max_matches": max(previous_prediction['matches']) if previous_prediction['matches'] else 0
+                            }
+                    except Exception as e:
+                        logger.warning(f"前回結果の取得エラー: {str(e)}")
+                
+                response_data = {
+                    "round": next_info['next_round'],
+                    "predictions": predictions,
+                    "is_existing": False,
+                    "created_at": next_info['current_date'],
+                    "prediction_count": len(predictions),
+                    "model_info": {
+                        "trained_models": len(prediction_system.trained_models),
+                        "data_count": prediction_system.data_count,
+                        "model_scores": prediction_system.model_scores
+                    },
+                    "previous_results": previous_results
+                }
+                
+                return create_success_response(response_data, "新規予測を生成しました")
+                
+        except Exception as e:
+            logger.error(f"予測処理エラー: {e}")
+            return create_error_response(f"予測処理でエラーが発生しました: {str(e)}", 500)
     
     except Exception as e:
-        logger.error(f"予測エラー: {e}")
+        logger.error(f"予測API全体エラー: {e}")
         logger.error(traceback.format_exc())
         return create_error_response(f"予測処理中にエラーが発生しました: {str(e)}", 500)
 
