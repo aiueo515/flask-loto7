@@ -46,6 +46,9 @@ def init_system():
         file_manager = FileManager()
         prediction_system = AutoFetchEnsembleLoto7()
         
+        # ファイル管理器を設定（重要）
+        prediction_system.set_file_manager(file_manager)
+        
         # 保存済みモデルがあれば読み込み
         if file_manager.model_exists():
             prediction_system.load_models()
