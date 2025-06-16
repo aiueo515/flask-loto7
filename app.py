@@ -40,63 +40,108 @@ prediction_system = None
 file_manager = None
 
 def init_system():
-    """システム初期化（デバッグ版）"""
+    """システム初期化（軽量版 - タイムアウト対策）"""
     global prediction_system, file_manager
     try:
-        logger.info("=== システム初期化開始 ===")
+        logger.info("=== 軽量システム初期化開始 ===")
         
-        # ファイル管理器の初期化
-        logger.info("ファイル管理器を初期化中...")
+        # 🚀 最小限の初期化のみ実行
+        logger.info("📁 ファイル管理器を初期化中...")
         file_manager = FileManager()
-        logger.info("ファイル管理器の初期化完了")
+        logger.info("✅ ファイル管理器の初期化完了")
         
-        # 予測システムの初期化
-        logger.info("予測システムを初期化中...")
+        # 🎯 予測システムは基本構造のみ作成（重い処理はスキップ）
+        logger.info("🤖 予測システム基本構造を作成中...")
         prediction_system = AutoFetchEnsembleLoto7()
-        logger.info("予測システムの初期化完了")
-        
-        # ファイル管理器を設定
-        logger.info("ファイル管理器を予測システムに設定中...")
         prediction_system.set_file_manager(file_manager)
-        logger.info("ファイル管理器の設定完了")
+        logger.info("✅ 予測システム基本構造作成完了")
         
-        # 保存済みモデルがあれば読み込み
-        if file_manager.model_exists():
-            logger.info("保存済みモデルを読み込み中...")
-            try:
-                success = prediction_system.load_models()
-                if success:
-                    logger.info("保存済みモデルの読み込み成功")
-                else:
-                    logger.warning("保存済みモデルの読み込み失敗")
-            except Exception as e:
-                logger.error(f"モデル読み込みエラー: {str(e)}")
-                logger.error(traceback.format_exc())
-        else:
-            logger.info("保存済みモデルが存在しません")
+        # 🔥 重い処理は全てスキップ（後で実行）
+        logger.info("ℹ️ データ取得・モデル読み込みは後で実行します")
+        logger.info("🎉 軽量初期化完了（重い処理はオンデマンド実行）")
         
-        # 予測履歴があれば読み込み
-        if file_manager.history_exists():
-            logger.info("予測履歴を読み込み中...")
-            try:
-                success = prediction_system.history.load_from_csv()
-                if success:
-                    logger.info("予測履歴の読み込み成功")
-                else:
-                    logger.warning("予測履歴の読み込み失敗")
-            except Exception as e:
-                logger.error(f"履歴読み込みエラー: {str(e)}")
-                logger.error(traceback.format_exc())
-        else:
-            logger.info("予測履歴が存在しません")
-        
-        logger.info("=== システム初期化完了 ===")
         return True
         
     except Exception as e:
-        logger.error(f"システム初期化エラー: {str(e)}")
+        logger.error(f"🛑 軽量初期化エラー: {str(e)}")
         logger.error(f"エラー詳細:\n{traceback.format_exc()}")
         return False
+
+# 新しい関数：重い処理を後で実行
+def init_heavy_components():
+    """重いコンポーネントの初期化（オンデマンド）"""
+    global prediction_system, file_manager
+    
+    if not prediction_system:
+        return {"status": "error", "message": "基本システムが初期化されていません"}
+    
+    try:
+        logger.info("=== 重いコンポーネント初期化開始 ===")
+        
+        # 1. 保存済みモデル読み込み
+        if file_manager.model_exists():
+            logger.info("📂 保存済みモデルを読み込み中...")
+            try:
+                success = prediction_system.load_models()
+                if success:
+                    logger.info("✅ 保存済みモデルの読み込み成功")
+                else:
+                    logger.warning("⚠️ 保存済みモデルの読み込み失敗")
+            except Exception as e:
+                logger.error(f"❌ モデル読み込みエラー: {str(e)}")
+        
+        # 2. 予測履歴読み込み
+        if file_manager.history_exists():
+            logger.info("📋 予測履歴を読み込み中...")
+            try:
+                success = prediction_system.history.load_from_csv()
+                if success:
+                    logger.info("✅ 予測履歴の読み込み成功")
+                else:
+                    logger.warning("⚠️ 予測履歴の読み込み失敗")
+            except Exception as e:
+                logger.error(f"❌ 履歴読み込みエラー: {str(e)}")
+        
+        # 3. データ取得（時間制限付き）
+        logger.info("🌐 データ取得を試行中（タイムアウト: 30秒）...")
+        try:
+            import signal
+            
+            def timeout_handler(signum, frame):
+                raise TimeoutError("データ取得がタイムアウトしました")
+            
+            # タイムアウト設定（30秒）
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(30)
+            
+            try:
+                data_success = prediction_system.data_fetcher.fetch_latest_data()
+                signal.alarm(0)  # タイムアウト解除
+                
+                if data_success:
+                    logger.info("✅ データ取得成功")
+                else:
+                    logger.warning("⚠️ データ取得失敗（キャッシュまたは手動で対応可能）")
+            except TimeoutError:
+                signal.alarm(0)
+                logger.warning("⚠️ データ取得がタイムアウトしました（後で再試行可能）")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ データ取得エラー: {str(e)}")
+        
+        logger.info("🎉 重いコンポーネント初期化完了")
+        
+        return {
+            "status": "success", 
+            "message": "重いコンポーネントの初期化が完了しました",
+            "models_loaded": len(prediction_system.trained_models) > 0,
+            "data_available": prediction_system.data_fetcher.latest_data is not None,
+            "history_loaded": len(prediction_system.history.predictions) > 0
+        }
+        
+    except Exception as e:
+        logger.error(f"重いコンポーネント初期化エラー: {e}")
+        return {"status": "error", "message": str(e)}
 
 def create_success_response(data, message="Success"):
     """統一成功レスポンス"""
@@ -138,6 +183,17 @@ def index():
         else:
             return f"Error: {str(e)}", 500
 
+# 新しいAPIエンドポイント：重い初期化
+@app.route('/api/init_heavy', methods=['POST'])
+def init_heavy():
+    """重いコンポーネントの初期化API"""
+    try:
+        result = init_heavy_components()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"重い初期化APIエラー: {e}")
+        return create_error_response(f"重い初期化に失敗しました: {str(e)}", 500)
+
 # 静的ファイル配信（PWA用）
 @app.route('/static/<path:filename>')
 def static_files(filename):
@@ -161,14 +217,21 @@ def service_worker():
 
 @app.route('/api/predict', methods=['GET'])
 def predict():
-    """20セットの予測を返す（永続化対応）"""
+    """20セットの予測を返す（自動初期化対応）"""
     try:
         if not prediction_system:
-            logger.error("予測システムが初期化されていません")
-            return create_error_response("システムが初期化されていません", 500, {
-                "details": "prediction_system is None",
-                "suggestion": "システムの再起動が必要です"
-            })
+            return create_error_response("システムが初期化されていません", 500)
+        
+        # 🔥 重いコンポーネントが初期化されていない場合は自動初期化
+        if not hasattr(prediction_system, 'trained_models') or len(prediction_system.trained_models) == 0:
+            logger.info("重いコンポーネントが未初期化のため、自動初期化を実行中...")
+            init_result = init_heavy_components()
+            
+            if init_result["status"] == "error":
+                return create_error_response(f"自動初期化に失敗しました: {init_result['message']}", 500)
+        
+        # 以下は既存のコードをそのまま続ける...
+
         
         # データ取得チェック
         if not hasattr(prediction_system, 'data_fetcher'):
