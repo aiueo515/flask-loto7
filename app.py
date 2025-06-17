@@ -417,6 +417,127 @@ def get_recent_results():
 
 # app.py に追加するAPIエンドポイント
 
+# 🔥 予測履歴API
+@app.route('/api/prediction_history', methods=['GET'])
+def get_prediction_history():
+    """予測履歴を取得（同期処理）"""
+    try:
+        count = int(request.args.get('count', 5))
+        count = min(max(count, 1), 20)  # 1-20の範囲に制限
+        
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
+        
+        # 予測履歴ファイルが存在するかチェック
+        if not file_manager.history_exists():
+            return create_success_response({
+                'predictions': [],
+                'total_count': 0,
+                'message': '予測履歴がまだありません'
+            }, "予測履歴を取得しました（履歴なし）")
+        
+        # 履歴読み込み（軽量処理）
+        try:
+            from models.prediction_history import RoundAwarePredictionHistory
+            history = RoundAwarePredictionHistory()
+            history.set_file_manager(file_manager)
+            
+            if history.load_from_csv():
+                recent_predictions = history.get_recent_predictions(count)
+                
+                return create_success_response({
+                    'predictions': recent_predictions,
+                    'total_count': len(history.predictions),
+                    'summary': history.get_prediction_summary()
+                }, f"最近の予測履歴{len(recent_predictions)}件を取得しました")
+            else:
+                return create_error_response("予測履歴の読み込みに失敗しました", 500)
+                
+        except Exception as e:
+            logger.error(f"予測履歴処理エラー: {e}")
+            return create_error_response(f"予測履歴の処理中にエラーが発生しました: {str(e)}", 500)
+        
+    except Exception as e:
+        logger.error(f"予測履歴API取得エラー: {e}")
+        return create_error_response(f"予測履歴取得中にエラーが発生しました: {str(e)}", 500)
+
+# 🔥 予測詳細API
+@app.route('/api/prediction_detail/<int:round_number>', methods=['GET'])
+def get_prediction_detail(round_number):
+    """指定開催回の予測詳細を取得"""
+    try:
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
+        
+        from models.prediction_history import RoundAwarePredictionHistory
+        history = RoundAwarePredictionHistory()
+        history.set_file_manager(file_manager)
+        
+        if not history.load_from_csv():
+            return create_error_response("予測履歴の読み込みに失敗しました", 500)
+        
+        detailed_analysis = history.get_detailed_analysis(round_number)
+        
+        if not detailed_analysis:
+            return create_error_response(f"第{round_number}回の予測が見つかりません", 404)
+        
+        return create_success_response(detailed_analysis, f"第{round_number}回の詳細を取得しました")
+        
+    except Exception as e:
+        logger.error(f"予測詳細取得エラー: {e}")
+        return create_error_response(f"予測詳細取得中にエラーが発生しました: {str(e)}", 500)
+
+# 🔥 予測開始API（初期化機能付き）
+@app.route('/api/predict_with_init', methods=['POST'])
+def predict_with_init():
+    """予測開始（自動初期化付き）"""
+    try:
+        # Celery接続確認
+        try:
+            # アクティブワーカーの確認
+            inspect = celery_app.control.inspect()
+            active = inspect.active()
+            if not active:
+                logger.warning("Celeryワーカーが検出されません")
+        except Exception as e:
+            logger.error(f"Celery接続エラー: {e}")
+            return create_error_response(f"非同期処理システムに接続できません: {str(e)}", 500)
+        
+        # 初期化 + 予測タスクを開始
+        task = tasks.predict_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '予測を開始しました（初期化込み）',
+            'estimated_time': '3-10分'
+        }, "予測タスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"予測開始エラー: {e}")
+        return create_error_response(f"予測タスクの開始に失敗しました: {str(e)}", 500)
+
+# 🔥 軽量初期化API
+@app.route('/api/init_light', methods=['POST'])
+def init_light():
+    """軽量初期化（同期処理）"""
+    try:
+        # 重い初期化は非同期で実行
+        task = tasks.heavy_init_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '初期化を開始しました',
+            'estimated_time': '2-5分'
+        }, "初期化タスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"軽量初期化エラー: {e}")
+        return create_error_response(f"初期化の開始に失敗しました: {str(e)}", 500)
+
+# app.py に追加するAPIエンドポイント
+
 # 🔥 段階的学習API群
 
 @app.route('/api/learning/progress', methods=['GET'])
