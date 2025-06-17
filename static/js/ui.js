@@ -1,9 +1,611 @@
 /**
- * UI管理クラス - 非同期対応機能追加
- * 長時間処理の進捗表示とユーザー体験向上
+ * UI管理クラス - ロト7予測PWA
+ * 完全版 - 基本機能 + 非同期対応機能
  */
 
-// 既存のUIクラスに非同期対応機能を追加
+class UI {
+    constructor() {
+        this.currentTab = 'predict';
+        this.isLoadingTab = false;
+        this.toasts = [];
+        this.modalStack = [];
+        this.init();
+    }
+    
+    /**
+     * 初期化
+     */
+    init() {
+        this.setupEventListeners();
+        this.updateConnectionStatus(navigator.onLine);
+        console.log('✅ UI クラス初期化完了');
+    }
+    
+    /**
+     * イベントリスナー設定
+     */
+    setupEventListeners() {
+        // タブ切り替え
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                const tabName = e.target.closest('.nav-tab').dataset.tab;
+                this.switchTab(tabName);
+            });
+        });
+        
+        // 予測取得ボタン
+        const getPredictionBtn = document.getElementById('get-prediction-btn');
+        if (getPredictionBtn) {
+            getPredictionBtn.addEventListener('click', () => {
+                this.getPrediction();
+            });
+        }
+        
+        // 更新ボタン
+        const refreshBtn = document.getElementById('refresh-btn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                this.refreshCurrentTab();
+            });
+        }
+        
+        // モデル学習ボタン
+        const trainModelBtn = document.getElementById('train-model-btn');
+        if (trainModelBtn) {
+            trainModelBtn.addEventListener('click', () => {
+                this.trainModel();
+            });
+        }
+        
+        // 検証実行ボタン
+        const runValidationBtn = document.getElementById('run-validation-btn');
+        if (runValidationBtn) {
+            runValidationBtn.addEventListener('click', () => {
+                this.runValidation();
+            });
+        }
+        
+        // モーダル閉じるボタン
+        const modalClose = document.getElementById('modal-close');
+        if (modalClose) {
+            modalClose.addEventListener('click', () => {
+                this.hideModal();
+            });
+        }
+        
+        // モーダルオーバーレイクリック
+        const modalOverlay = document.getElementById('modal-overlay');
+        if (modalOverlay) {
+            modalOverlay.addEventListener('click', (e) => {
+                if (e.target === modalOverlay) {
+                    this.hideModal();
+                }
+            });
+        }
+        
+        // 接続状態監視
+        window.addEventListener('online', () => {
+            this.updateConnectionStatus(true);
+        });
+        
+        window.addEventListener('offline', () => {
+            this.updateConnectionStatus(false);
+        });
+    }
+    
+    /**
+     * タブ切り替え
+     * @param {string} tabName - タブ名
+     */
+    switchTab(tabName) {
+        if (this.currentTab === tabName) return;
+        
+        // ナビゲーションタブの更新
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+        
+        // コンテンツの切り替え
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.toggle('active', content.id === `${tabName}-tab`);
+        });
+        
+        this.currentTab = tabName;
+        this.initTab(tabName);
+    }
+    
+    /**
+     * タブ初期化
+     * @param {string} tabName - タブ名
+     * @param {boolean} showUpdateToast - 更新通知を表示するか
+     */
+    async initTab(tabName, showUpdateToast = false) {
+        if (this.isLoadingTab) return;
+        
+        this.isLoadingTab = true;
+        
+        try {
+            switch (tabName) {
+                case 'predict':
+                    await this.loadSystemStatus();
+                    await this.loadPrediction();
+                    break;
+                case 'history':
+                    await this.loadPredictionHistory();
+                    break;
+                case 'analysis':
+                    await this.loadAnalysisData();
+                    break;
+                case 'settings':
+                    this.updateSettingsUI();
+                    break;
+            }
+            
+            if (showUpdateToast) {
+                this.showToast('更新完了', 'success');
+            }
+        } catch (error) {
+            console.error(`タブ初期化エラー (${tabName}):`, error);
+            this.showToast(`${tabName}タブの読み込みに失敗しました`, 'error');
+        } finally {
+            this.isLoadingTab = false;
+        }
+    }
+    
+    /**
+     * 現在のタブを更新
+     */
+    refreshCurrentTab() {
+        this.initTab(this.currentTab, true);
+    }
+    
+    /**
+     * システム状態の読み込み
+     */
+    async loadSystemStatus() {
+        try {
+            const statusContainer = document.getElementById('system-status');
+            if (!statusContainer) return;
+            
+            // ローディング表示
+            statusContainer.innerHTML = `
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    <p>システム状態を確認中...</p>
+                </div>
+            `;
+            
+            const response = await window.api.getSystemStatus();
+            
+            if (response.status === 'success') {
+                this.displaySystemStatus(response.data);
+            } else {
+                throw new Error(response.message);
+            }
+        } catch (error) {
+            console.error('システム状態読み込みエラー:', error);
+            this.displaySystemStatusError(error.message);
+        }
+    }
+    
+    /**
+     * システム状態の表示
+     * @param {Object} statusData - ステータスデータ
+     */
+    displaySystemStatus(statusData) {
+        const container = document.getElementById('system-status');
+        if (!container) return;
+        
+        const isInitialized = statusData.initialized || false;
+        const indicatorClass = isInitialized ? 'online' : 'offline';
+        const statusText = isInitialized ? 'システム正常' : '初期化が必要';
+        
+        container.innerHTML = `
+            <div class="status-header">
+                <h3>システム状態</h3>
+                <div class="status-indicator">
+                    <span class="dot ${indicatorClass}"></span>
+                    <span class="text">${statusText}</span>
+                </div>
+            </div>
+            <div class="status-details">
+                <div class="status-item">
+                    <span class="status-label">非同期処理</span>
+                    <span class="status-value">${statusData.async_mode ? '有効' : '無効'}</span>
+                </div>
+                ${statusData.memory ? `
+                    <div class="status-item">
+                        <span class="status-label">メモリ使用量</span>
+                        <span class="status-value">${statusData.memory.memory_usage_mb}MB</span>
+                    </div>
+                ` : ''}
+                ${statusData.celery ? `
+                    <div class="status-item">
+                        <span class="status-label">アクティブタスク</span>
+                        <span class="status-value">${statusData.celery.active_tasks}件</span>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+    
+    /**
+     * システム状態エラー表示
+     * @param {string} errorMessage - エラーメッセージ
+     */
+    displaySystemStatusError(errorMessage) {
+        const container = document.getElementById('system-status');
+        if (!container) return;
+        
+        container.innerHTML = `
+            <div class="status-header">
+                <h3>システム状態</h3>
+                <div class="status-indicator">
+                    <span class="dot offline"></span>
+                    <span class="text">エラー</span>
+                </div>
+            </div>
+            <div class="error-state">
+                <div class="error-icon">⚠️</div>
+                <div class="error-title">状態確認エラー</div>
+                <div class="error-message">${errorMessage}</div>
+                <button class="btn btn-primary" onclick="window.ui.loadSystemStatus()">
+                    再試行
+                </button>
+            </div>
+        `;
+    }
+    
+    /**
+     * 予測の読み込み
+     */
+    async loadPrediction() {
+        const container = document.getElementById('prediction-card');
+        if (!container) return;
+        
+        // 初期化オプションを表示
+        this.showSystemInitializationOptions();
+    }
+    
+    /**
+     * 予測履歴の読み込み
+     */
+    async loadPredictionHistory() {
+        try {
+            const response = await window.api.get('/api/prediction_history', { count: 10 });
+            
+            if (response.status === 'success') {
+                this.displayPredictionHistory(response.data);
+            } else {
+                throw new Error(response.message);
+            }
+        } catch (error) {
+            console.error('予測履歴読み込みエラー:', error);
+            this.displayHistoryError(error.message);
+        }
+    }
+    
+    /**
+     * 予測履歴の表示
+     * @param {Object} historyData - 履歴データ
+     */
+    displayPredictionHistory(historyData) {
+        const container = document.getElementById('history-list');
+        if (!container) return;
+        
+        if (!historyData.predictions || historyData.predictions.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">📊</div>
+                    <div class="empty-title">予測履歴なし</div>
+                    <div class="empty-description">まだ予測履歴がありません</div>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = `
+            <div class="history-summary">
+                <h4>予測履歴 (${historyData.total_count}件)</h4>
+            </div>
+            <div class="history-items">
+                ${historyData.predictions.map(prediction => `
+                    <div class="history-item">
+                        <div class="history-header-info">
+                            <div class="round-info">
+                                <span class="round-number">第${prediction.round}回</span>
+                                <span class="round-date">${prediction.date}</span>
+                            </div>
+                            <div class="verification-badge ${prediction.verified ? 'badge-verified' : 'badge-pending'}">
+                                ${prediction.verified ? '検証済み' : '未検証'}
+                            </div>
+                        </div>
+                        <div class="prediction-summary">
+                            <p>予測セット数: ${prediction.prediction_count}件</p>
+                            ${prediction.verified ? `
+                                <p>最高一致: ${prediction.max_matches}個</p>
+                                <p>平均一致: ${prediction.avg_matches.toFixed(2)}個</p>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    /**
+     * 履歴エラー表示
+     * @param {string} errorMessage - エラーメッセージ
+     */
+    displayHistoryError(errorMessage) {
+        const container = document.getElementById('history-list');
+        if (!container) return;
+        
+        container.innerHTML = `
+            <div class="error-state">
+                <div class="error-icon">❌</div>
+                <div class="error-title">履歴読み込みエラー</div>
+                <div class="error-message">${errorMessage}</div>
+                <button class="btn btn-primary" onclick="window.ui.loadPredictionHistory()">
+                    再試行
+                </button>
+            </div>
+        `;
+    }
+    
+    /**
+     * 分析データの読み込み
+     */
+    async loadAnalysisData() {
+        const container = document.getElementById('analysis-results');
+        if (!container) return;
+        
+        container.innerHTML = `
+            <div class="analysis-status">
+                <div class="status-card">
+                    <h4>🔍 分析機能</h4>
+                    <p>時系列交差検証と自動学習改善を実行できます。</p>
+                    <div class="analysis-controls">
+                        <button class="btn btn-primary" onclick="window.ui.runValidationAsync()">
+                            🔍 時系列検証実行
+                        </button>
+                        <button class="btn btn-secondary" onclick="window.ui.trainModelAsync()">
+                            🤖 モデル学習実行
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    /**
+     * 設定UIの更新
+     */
+    updateSettingsUI() {
+        console.log('設定UI更新');
+        // 設定タブの初期化処理
+    }
+    
+    /**
+     * 予測表示
+     * @param {Object} predictionData - 予測データ
+     */
+    displayPrediction(predictionData) {
+        const container = document.getElementById('prediction-results');
+        if (!container) return;
+        
+        container.classList.remove('hidden');
+        
+        container.innerHTML = `
+            <div class="prediction-header">
+                <h3>第${predictionData.round}回 予測結果</h3>
+                <p class="prediction-date">${predictionData.created_at}</p>
+            </div>
+            <div class="prediction-sets">
+                ${predictionData.predictions.map((prediction, index) => `
+                    <div class="prediction-set">
+                        <div class="set-number">セット${index + 1}</div>
+                        <div class="numbers-container">
+                            ${prediction.map(num => `
+                                <span class="number-ball">${num}</span>
+                            `).join('')}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    /**
+     * 予測エラー表示
+     * @param {string} errorMessage - エラーメッセージ
+     */
+    displayPredictionError(errorMessage) {
+        const container = document.getElementById('prediction-results');
+        if (!container) return;
+        
+        container.classList.remove('hidden');
+        container.innerHTML = `
+            <div class="error-state">
+                <div class="error-icon">❌</div>
+                <div class="error-title">予測エラー</div>
+                <div class="error-message">${errorMessage}</div>
+                <button class="btn btn-primary" onclick="window.ui.getPrediction()">
+                    再試行
+                </button>
+            </div>
+        `;
+    }
+    
+    /**
+     * トースト通知表示
+     * @param {string} message - メッセージ
+     * @param {string} type - タイプ (success, error, warning, info)
+     * @param {number} duration - 表示時間（ミリ秒、0で自動非表示なし）
+     */
+    showToast(message, type = 'info', duration = 5000) {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        
+        const icons = {
+            success: '✅',
+            error: '❌',
+            warning: '⚠️',
+            info: 'ℹ️'
+        };
+        
+        toast.innerHTML = `
+            <div class="toast-icon">${icons[type] || icons.info}</div>
+            <div class="toast-content">
+                <div class="toast-message">${message}</div>
+            </div>
+            <button class="toast-close">×</button>
+        `;
+        
+        // 閉じるボタンのイベント
+        toast.querySelector('.toast-close').addEventListener('click', () => {
+            this.removeToast(toast);
+        });
+        
+        container.appendChild(toast);
+        this.toasts.push(toast);
+        
+        // 自動で削除
+        if (duration > 0) {
+            setTimeout(() => {
+                this.removeToast(toast);
+            }, duration);
+        }
+        
+        console.log(`Toast: ${message} (${type})`);
+    }
+    
+    /**
+     * トースト削除
+     * @param {HTMLElement} toast - トースト要素
+     */
+    removeToast(toast) {
+        if (toast && toast.parentNode) {
+            toast.style.animation = 'slideOutDown 0.3s ease-in-out';
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 300);
+            
+            this.toasts = this.toasts.filter(t => t !== toast);
+        }
+    }
+    
+    /**
+     * モーダル表示
+     * @param {string} title - タイトル
+     * @param {string} content - コンテンツHTML
+     * @param {Array} buttons - ボタン配列
+     */
+    showModal(title, content, buttons = []) {
+        const overlay = document.getElementById('modal-overlay');
+        const modalTitle = document.getElementById('modal-title');
+        const modalContent = document.getElementById('modal-content');
+        const modalFooter = document.getElementById('modal-footer');
+        
+        if (!overlay) return;
+        
+        modalTitle.textContent = title;
+        modalContent.innerHTML = content;
+        
+        // ボタンの設定
+        if (buttons.length > 0) {
+            modalFooter.innerHTML = buttons.map(button => `
+                <button class="btn ${button.class || 'btn-secondary'}" 
+                        onclick="${button.handler ? button.handler.toString() + '()' : 'window.ui.hideModal()'}">
+                    ${button.text}
+                </button>
+            `).join('');
+        } else {
+            modalFooter.innerHTML = '';
+        }
+        
+        overlay.classList.remove('hidden');
+        this.modalStack.push(overlay);
+        
+        console.log(`Modal: ${title}`);
+    }
+    
+    /**
+     * モーダル非表示
+     */
+    hideModal() {
+        const overlay = document.getElementById('modal-overlay');
+        if (overlay) {
+            overlay.classList.add('hidden');
+        }
+        
+        this.modalStack.pop();
+        console.log('Modal hidden');
+    }
+    
+    /**
+     * 確認ダイアログ表示
+     * @param {string} title - タイトル
+     * @param {string} message - メッセージ
+     * @returns {Promise<boolean>} 確認結果
+     */
+    showConfirmDialog(title, message) {
+        return new Promise((resolve) => {
+            this.showModal(title, `<p>${message}</p>`, [
+                {
+                    text: 'キャンセル',
+                    class: 'btn-secondary',
+                    handler: () => {
+                        this.hideModal();
+                        resolve(false);
+                    }
+                },
+                {
+                    text: 'OK',
+                    class: 'btn-primary',
+                    handler: () => {
+                        this.hideModal();
+                        resolve(true);
+                    }
+                }
+            ]);
+        });
+    }
+    
+    /**
+     * 接続状態更新
+     * @param {boolean} online - オンライン状態
+     */
+    updateConnectionStatus(online) {
+        const statusEl = document.getElementById('connection-status');
+        if (!statusEl) return;
+        
+        const indicator = statusEl.querySelector('.status-indicator');
+        const text = statusEl.querySelector('.status-text');
+        
+        if (indicator) {
+            indicator.className = `status-indicator ${online ? 'online' : 'offline'}`;
+        }
+        
+        if (text) {
+            text.textContent = online ? 'オンライン' : 'オフライン';
+        }
+        
+        console.log(`接続状態: ${online ? 'オンライン' : 'オフライン'}`);
+    }
+}
+
+// グローバルに公開
+window.UI = UI;
+console.log('✅ UI クラス定義完了');
+
+// === 非同期対応機能の拡張 ===
+
 Object.assign(UI.prototype, {
     
     /**
@@ -87,43 +689,6 @@ Object.assign(UI.prototype, {
         if (percentageEl) percentageEl.textContent = `${progress.progress || 0}%`;
         if (currentEl) currentEl.textContent = progress.current || 0;
         if (totalEl) totalEl.textContent = progress.total || 1;
-    },
-    
-    /**
-     * 🔥 重いコンポーネントの非同期初期化
-     */
-    async initHeavyComponentsAsync() {
-        try {
-            const taskId = await window.api.initHeavyComponentsAsync(
-                // onProgress
-                (progress) => {
-                    console.log('初期化進捗:', progress);
-                },
-                // onComplete
-                (result) => {
-                    this.showToast('初期化が完了しました！', 'success');
-                    // システム状態を更新
-                    this.loadSystemStatus();
-                },
-                // onError
-                (error) => {
-                    console.error('初期化エラー:', error);
-                }
-            );
-            
-            this.showProgressModal('重いコンポーネント初期化', taskId,
-                (result) => {
-                    this.showToast('初期化が完了しました！', 'success');
-                    this.loadSystemStatus();
-                },
-                (error) => {
-                    this.showToast(`初期化エラー: ${error.message}`, 'error');
-                }
-            );
-            
-        } catch (error) {
-            this.showToast(`初期化開始エラー: ${error.message}`, 'error');
-        }
     },
     
     /**
@@ -455,6 +1020,43 @@ Object.assign(UI.prototype, {
         document.getElementById('optimize-btn').addEventListener('click', () => {
             this.optimizeSystem();
         });
+    },
+    
+    /**
+     * 🔥 重いコンポーネントの非同期初期化
+     */
+    async initHeavyComponentsAsync() {
+        try {
+            const taskId = await window.api.initHeavyComponentsAsync(
+                // onProgress
+                (progress) => {
+                    console.log('初期化進捗:', progress);
+                },
+                // onComplete
+                (result) => {
+                    this.showToast('初期化が完了しました！', 'success');
+                    // システム状態を更新
+                    this.loadSystemStatus();
+                },
+                // onError
+                (error) => {
+                    console.error('初期化エラー:', error);
+                }
+            );
+            
+            this.showProgressModal('重いコンポーネント初期化', taskId,
+                (result) => {
+                    this.showToast('初期化が完了しました！', 'success');
+                    this.loadSystemStatus();
+                },
+                (error) => {
+                    this.showToast(`初期化エラー: ${error.message}`, 'error');
+                }
+            );
+            
+        } catch (error) {
+            this.showToast(`初期化開始エラー: ${error.message}`, 'error');
+        }
     }
 });
 
@@ -506,6 +1108,15 @@ Object.assign(UI.prototype, {
         
         // 非同期対応の初期化オプションを表示
         this.showSystemInitializationOptions();
+    },
+    
+    /**
+     * 基本システム状態表示
+     * @param {Object} statusData - ステータスデータ
+     */
+    displayBasicSystemStatus(statusData) {
+        console.log('基本システム状態:', statusData);
+        // 基本状態の表示処理
     }
 });
 
