@@ -1,19 +1,23 @@
 """
 Flask-based Loto7 Prediction API
-Render.com対応版
+非同期対応・超軽量初期化・メモリ最適化版
 """
 
 from flask import Flask, request, jsonify, send_file, send_from_directory, render_template
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 import os
 import json
 import traceback
+import gc
+import psutil
 from datetime import datetime
 import logging
 
-# 自作モジュール
-from models.prediction_system import AutoFetchEnsembleLoto7
+# Celery
+from celery_app import celery_app
+import tasks
+
+# 自作モジュール（最小限の読み込み）
 from utils.file_manager import FileManager
 
 # Flask設定
@@ -22,7 +26,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = './uploads'
 
 # CORS設定（PWA対応）
-CORS(app, origins=['*'])  # 本番環境では適切なオリジンを設定
+CORS(app, origins=['*'])
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -35,113 +39,48 @@ os.makedirs('./data', exist_ok=True)
 os.makedirs('./static', exist_ok=True)
 os.makedirs('./templates', exist_ok=True)
 
-# グローバル変数
-prediction_system = None
+# グローバル変数（最小限）
 file_manager = None
 
-def init_system():
-    """システム初期化（軽量版 - タイムアウト対策）"""
-    global prediction_system, file_manager
+def ultra_light_init():
+    """🔥 超軽量初期化 - 1秒以内で完了"""
+    global file_manager
     try:
-        logger.info("=== 軽量システム初期化開始 ===")
+        logger.info("=== 超軽量初期化開始 ===")
         
-        # 🚀 最小限の初期化のみ実行
-        logger.info("📁 ファイル管理器を初期化中...")
+        # ファイル管理器のみ初期化
         file_manager = FileManager()
-        logger.info("✅ ファイル管理器の初期化完了")
+        logger.info("✅ ファイル管理器初期化完了")
         
-        # 🎯 予測システムは基本構造のみ作成（重い処理はスキップ）
-        logger.info("🤖 予測システム基本構造を作成中...")
-        prediction_system = AutoFetchEnsembleLoto7()
-        prediction_system.set_file_manager(file_manager)
-        logger.info("✅ 予測システム基本構造作成完了")
+        # メモリ最適化の初期設定
+        optimize_memory()
         
-        # 🔥 重い処理は全てスキップ（後で実行）
-        logger.info("ℹ️ データ取得・モデル読み込みは後で実行します")
-        logger.info("🎉 軽量初期化完了（重い処理はオンデマンド実行）")
-        
+        logger.info("🚀 超軽量初期化完了（< 1秒）")
         return True
         
     except Exception as e:
-        logger.error(f"🛑 軽量初期化エラー: {str(e)}")
-        logger.error(f"エラー詳細:\n{traceback.format_exc()}")
+        logger.error(f"🛑 超軽量初期化エラー: {str(e)}")
         return False
 
-# 新しい関数：重い処理を後で実行
-def init_heavy_components():
-    """重いコンポーネントの初期化（オンデマンド）"""
-    global prediction_system, file_manager
-    
-    if not prediction_system:
-        return {"status": "error", "message": "基本システムが初期化されていません"}
-    
+def optimize_memory():
+    """メモリ使用量を最適化"""
     try:
-        logger.info("=== 重いコンポーネント初期化開始 ===")
+        # ガベージコレクション実行
+        gc.collect()
         
-        # 1. 保存済みモデル読み込み
-        if file_manager.model_exists():
-            logger.info("📂 保存済みモデルを読み込み中...")
-            try:
-                success = prediction_system.load_models()
-                if success:
-                    logger.info("✅ 保存済みモデルの読み込み成功")
-                else:
-                    logger.warning("⚠️ 保存済みモデルの読み込み失敗")
-            except Exception as e:
-                logger.error(f"❌ モデル読み込みエラー: {str(e)}")
+        # メモリ使用量をログ出力
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        logger.info(f"💾 メモリ使用量: {memory_mb:.1f} MB")
         
-        # 2. 予測履歴読み込み
-        if file_manager.history_exists():
-            logger.info("📋 予測履歴を読み込み中...")
-            try:
-                success = prediction_system.history.load_from_csv()
-                if success:
-                    logger.info("✅ 予測履歴の読み込み成功")
-                else:
-                    logger.warning("⚠️ 予測履歴の読み込み失敗")
-            except Exception as e:
-                logger.error(f"❌ 履歴読み込みエラー: {str(e)}")
-        
-        # 3. データ取得（時間制限付き）
-        logger.info("🌐 データ取得を試行中（タイムアウト: 30秒）...")
-        try:
-            import signal
+        # メモリ警告（400MB超過時）
+        if memory_mb > 400:
+            logger.warning(f"⚠️ メモリ使用量が高いです: {memory_mb:.1f} MB")
+            gc.collect()  # 強制ガベージコレクション
             
-            def timeout_handler(signum, frame):
-                raise TimeoutError("データ取得がタイムアウトしました")
-            
-            # タイムアウト設定（30秒）
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(30)
-            
-            try:
-                data_success = prediction_system.data_fetcher.fetch_latest_data()
-                signal.alarm(0)  # タイムアウト解除
-                
-                if data_success:
-                    logger.info("✅ データ取得成功")
-                else:
-                    logger.warning("⚠️ データ取得失敗（キャッシュまたは手動で対応可能）")
-            except TimeoutError:
-                signal.alarm(0)
-                logger.warning("⚠️ データ取得がタイムアウトしました（後で再試行可能）")
-            
-        except Exception as e:
-            logger.warning(f"⚠️ データ取得エラー: {str(e)}")
-        
-        logger.info("🎉 重いコンポーネント初期化完了")
-        
-        return {
-            "status": "success", 
-            "message": "重いコンポーネントの初期化が完了しました",
-            "models_loaded": len(prediction_system.trained_models) > 0,
-            "data_available": prediction_system.data_fetcher.latest_data is not None,
-            "history_loaded": len(prediction_system.history.predictions) > 0
-        }
-        
     except Exception as e:
-        logger.error(f"重いコンポーネント初期化エラー: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"メモリ最適化エラー: {e}")
 
 def create_success_response(data, message="Success"):
     """統一成功レスポンス"""
@@ -167,6 +106,46 @@ def create_error_response(message, status_code=500, details=None):
     
     return jsonify(response), status_code
 
+def get_task_status(task_id):
+    """Celeryタスクの状態を取得"""
+    try:
+        task = celery_app.AsyncResult(task_id)
+        
+        if task.state == 'PENDING':
+            response = {
+                'state': task.state,
+                'status': 'タスクが開始されていません...'
+            }
+        elif task.state == 'PROGRESS':
+            response = {
+                'state': task.state,
+                'current': task.info.get('current', 0),
+                'total': task.info.get('total', 1),
+                'status': task.info.get('status', ''),
+                'progress': task.info.get('progress', 0)
+            }
+        elif task.state == 'SUCCESS':
+            response = {
+                'state': task.state,
+                'result': task.result,
+                'status': '完了'
+            }
+        else:  # FAILURE
+            response = {
+                'state': task.state,
+                'error': str(task.info),
+                'status': 'エラーが発生しました'
+            }
+        
+        return response
+    except Exception as e:
+        logger.error(f"タスク状態取得エラー: {e}")
+        return {
+            'state': 'FAILURE',
+            'error': str(e),
+            'status': 'タスク状態の取得に失敗しました'
+        }
+
 @app.route('/', methods=['GET'])
 def index():
     """PWAメインページ"""
@@ -175,7 +154,9 @@ def index():
         if request.headers.get('Accept') == 'application/json' or 'api' in request.args:
             system_status = {
                 "api_version": "1.0.0",
-                "system_initialized": prediction_system is not None,
+                "system_initialized": file_manager is not None,
+                "async_supported": True,
+                "celery_active": True,
                 "files_status": {
                     "model_exists": file_manager.model_exists() if file_manager else False,
                     "history_exists": file_manager.history_exists() if file_manager else False,
@@ -183,10 +164,15 @@ def index():
                 }
             }
             
-            if prediction_system:
-                system_status.update(prediction_system.get_system_status())
+            # メモリ情報追加
+            try:
+                process = psutil.Process(os.getpid())
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                system_status["memory_usage_mb"] = round(memory_mb, 1)
+            except:
+                pass
             
-            return create_success_response(system_status, "Loto7 Prediction API is running")
+            return create_success_response(system_status, "Loto7 Prediction API is running (Async Mode)")
         
         # 通常のアクセスはPWAページを返す
         return render_template('index.html')
@@ -197,283 +183,239 @@ def index():
         else:
             return f"Error: {str(e)}", 500
 
-# 新しいAPIエンドポイント：重い初期化
+# 🔥 非同期API: 重いコンポーネント初期化
 @app.route('/api/init_heavy', methods=['POST'])
-def init_heavy():
-    """重いコンポーネントの初期化API"""
+def init_heavy_async():
+    """重いコンポーネントの非同期初期化"""
     try:
-        result = init_heavy_components()
-        return jsonify(result)
+        # 非同期タスクを開始
+        task = tasks.heavy_init_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '重いコンポーネントの初期化を開始しました'
+        }, "初期化タスクを開始しました")
+        
     except Exception as e:
-        logger.error(f"重い初期化APIエラー: {e}")
-        return create_error_response(f"重い初期化に失敗しました: {str(e)}", 500)
+        logger.error(f"重い初期化API開始エラー: {e}")
+        return create_error_response(f"初期化タスクの開始に失敗しました: {str(e)}", 500)
 
-# 静的ファイル配信（PWA用）
-@app.route('/static/<path:filename>')
-def static_files(filename):
-    """静的ファイル配信"""
-    return send_from_directory('static', filename)
-
-# PWA必須ファイル
-@app.route('/manifest.json')
-def manifest():
-    """PWA Manifest"""
-    return send_from_directory('static', 'manifest.json')
-
-@app.route('/sw.js')
-def service_worker():
-    """Service Worker"""
-    response = send_from_directory('static', 'sw.js')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
-
-# app.py の @app.route('/api/predict', methods=['GET']) を以下に置き換え
-
+# 🔥 非同期API: 予測生成
 @app.route('/api/predict', methods=['GET'])
-def predict():
-    """20セットの予測を返す（初期化チェック改善版）"""
+def predict_async():
+    """非同期予測生成"""
     try:
-        # 🔧 初期化チェックを改善
-        if prediction_system is None:
-            logger.error("prediction_system is None - 緊急初期化を実行")
-            
-            # 緊急初期化を試行
-            init_success = init_system()
-            if not init_success:
-                return create_error_response("システムの緊急初期化に失敗しました", 500)
+        # リクエストパラメータ
+        force_async = request.args.get('async', 'true').lower() == 'true'
         
-        # prediction_system が存在するか再確認
-        if prediction_system is None:
-            return create_error_response("システム初期化に失敗しました", 500)
+        if not force_async:
+            # 🔥 同期モードは非推奨の警告を返す
+            return create_error_response(
+                "同期モードは非推奨です。async=true パラメータを使用してください", 
+                400
+            )
         
-        logger.info(f"予測API呼び出し - システム状態: prediction_system={prediction_system is not None}")
+        # 非同期タスクを開始
+        task = tasks.predict_task.delay()
         
-        # 🔥 重いコンポーネントが初期化されていない場合は自動初期化
-        needs_init = True
-        try:
-            if hasattr(prediction_system, 'trained_models') and len(prediction_system.trained_models) > 0:
-                needs_init = False
-                logger.info("既に学習済みモデルが存在します")
-            else:
-                logger.info("学習済みモデルが見つかりません - 自動初期化が必要")
-        except Exception as e:
-            logger.warning(f"モデル確認エラー: {e}")
-            needs_init = True
-            
-        if needs_init:
-            logger.info("重いコンポーネントが未初期化のため、自動初期化を実行中...")
-            init_result = init_heavy_components()
-            
-            if init_result["status"] == "error":
-                return create_error_response(f"自動初期化に失敗しました: {init_result['message']}", 500)
-            else:
-                logger.info("自動初期化が正常に完了しました")
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '予測生成を開始しました',
+            'estimated_time': '30-60秒'
+        }, "予測タスクを開始しました")
         
-        # data_fetcher の存在確認
-        if not hasattr(prediction_system, 'data_fetcher'):
-            logger.error("data_fetcher が存在しません")
-            return create_error_response("システム構成エラー: data_fetcher not found", 500)
-        
-        # データ取得（エラーハンドリング強化）
-        logger.info("最新データを取得中...")
-        try:
-            if not prediction_system.data_fetcher.fetch_latest_data():
-                logger.warning("データ取得に失敗しましたが、キャッシュで対応を試行")
-                # キャッシュがあるかチェック
-                if prediction_system.data_fetcher.latest_data is None:
-                    return create_error_response("最新データの取得に失敗しました", 500)
-        except Exception as e:
-            logger.error(f"データ取得エラー: {e}")
-            return create_error_response(f"データ取得中にエラーが発生しました: {str(e)}", 500)
-        
-        # 次回情報取得
-        logger.info("次回開催回情報を取得中...")
-        try:
-            next_info = prediction_system.data_fetcher.get_next_round_info()
-            if not next_info:
-                return create_error_response("次回開催回情報の取得に失敗しました", 500)
-            
-            logger.info(f"次回開催回: 第{next_info['next_round']}回")
-        except Exception as e:
-            logger.error(f"次回情報取得エラー: {e}")
-            return create_error_response(f"次回情報取得エラー: {str(e)}", 500)
-        
-        # 既存予測のチェック
-        logger.info("既存予測の確認中...")
-        try:
-            existing_prediction = prediction_system.history.find_prediction_by_round(next_info['next_round'])
-            
-            if existing_prediction:
-                logger.info(f"第{next_info['next_round']}回の既存予測を発見")
-                # 既存予測を返す
-                response_data = {
-                    "round": next_info['next_round'],
-                    "predictions": existing_prediction['predictions'],
-                    "is_existing": True,
-                    "created_at": existing_prediction['date'],
-                    "prediction_count": len(existing_prediction['predictions']),
-                    "verified": existing_prediction.get('verified', False)
-                }
-                
-                if existing_prediction.get('verified'):
-                    response_data["actual_result"] = existing_prediction.get('actual')
-                    response_data["matches"] = existing_prediction.get('matches')
-                
-                return create_success_response(response_data, "既存の予測を返しました")
-            
-            else:
-                logger.info(f"第{next_info['next_round']}回の新規予測が必要")
-                
-                # 新規予測生成
-                if not prediction_system.trained_models:
-                    logger.info("学習済みモデルがありません。自動セットアップを開始します...")
-                    try:
-                        training_success = prediction_system.auto_setup_and_train()
-                        if not training_success:
-                            return create_error_response("モデル学習に失敗しました", 500)
-                        logger.info("自動セットアップが完了しました")
-                    except Exception as e:
-                        logger.error(f"自動セットアップエラー: {e}")
-                        return create_error_response(f"モデル学習中にエラーが発生しました: {str(e)}", 500)
-                
-                # 予測生成
-                logger.info("20セット予測を生成中...")
-                try:
-                    predictions, next_info_updated = prediction_system.predict_next_round(20, use_learning=True)
-                    
-                    if not predictions:
-                        return create_error_response("予測生成に失敗しました", 500)
-                    
-                    if next_info_updated:
-                        next_info = next_info_updated
-                    
-                    logger.info(f"予測生成完了: {len(predictions)}セット")
-                        
-                except Exception as e:
-                    logger.error(f"予測生成エラー: {e}")
-                    return create_error_response(f"予測生成中にエラーが発生しました: {str(e)}", 500)
-                
-                # 前回結果の分析
-                previous_results = None
-                if next_info['latest_round'] > 1:
-                    try:
-                        previous_prediction = prediction_system.history.find_prediction_by_round(next_info['latest_round'])
-                        if previous_prediction and previous_prediction.get('verified'):
-                            previous_results = {
-                                "round": next_info['latest_round'],
-                                "predictions": previous_prediction['predictions'],
-                                "actual": previous_prediction['actual'],
-                                "matches": previous_prediction['matches'],
-                                "avg_matches": sum(previous_prediction['matches']) / len(previous_prediction['matches']) if previous_prediction['matches'] else 0,
-                                "max_matches": max(previous_prediction['matches']) if previous_prediction['matches'] else 0
-                            }
-                    except Exception as e:
-                        logger.warning(f"前回結果の取得エラー: {str(e)}")
-                
-                response_data = {
-                    "round": next_info['next_round'],
-                    "predictions": predictions,
-                    "is_existing": False,
-                    "created_at": next_info['current_date'],
-                    "prediction_count": len(predictions),
-                    "model_info": {
-                        "trained_models": len(prediction_system.trained_models),
-                        "data_count": prediction_system.data_count,
-                        "model_scores": prediction_system.model_scores
-                    },
-                    "previous_results": previous_results
-                }
-                
-                return create_success_response(response_data, "新規予測を生成しました")
-                
-        except Exception as e:
-            logger.error(f"予測処理エラー: {e}")
-            return create_error_response(f"予測処理でエラーが発生しました: {str(e)}", 500)
-    
     except Exception as e:
-        logger.error(f"予測API全体エラー: {e}")
-        logger.error(traceback.format_exc())
-        return create_error_response(f"予測処理中にエラーが発生しました: {str(e)}", 500)
+        logger.error(f"非同期予測API開始エラー: {e}")
+        return create_error_response(f"予測タスクの開始に失敗しました: {str(e)}", 500)
 
+# 🔥 非同期API: モデル学習
 @app.route('/api/train', methods=['POST'])
-def train():
-    """モデル再学習（時系列検証・自動照合学習含む）"""
+def train_async():
+    """非同期モデル学習"""
     try:
-        if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
-        
         # リクエストパラメータ
         request_data = request.get_json() or {}
-        force_full_train = request_data.get('force_full_train', False)
-        run_timeseries_validation = request_data.get('run_timeseries_validation', True)
-        run_auto_verification = request_data.get('run_auto_verification', True)
         
-        training_results = {
-            "training": None,
-            "timeseries_validation": None,
-            "auto_verification": None
-        }
+        # 非同期タスクを開始
+        task = tasks.train_model_task.delay(request_data)
         
-        # 1. データ取得
-        if not prediction_system.data_fetcher.fetch_latest_data():
-            return create_error_response("最新データの取得に失敗しました", 500)
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': 'モデル学習を開始しました',
+            'estimated_time': '2-5分',
+            'options': request_data
+        }, "学習タスクを開始しました")
         
-        # 2. 自動セットアップ・学習
-        training_success = prediction_system.auto_setup_and_train(force_full_train=force_full_train)
-        if not training_success:
-            return create_error_response("モデル学習に失敗しました", 500)
-        
-        training_results["training"] = {
-            "success": True,
-            "model_count": len(prediction_system.trained_models),
-            "data_count": prediction_system.data_count,
-            "model_scores": prediction_system.model_scores
-        }
-        
-        # 3. 時系列交差検証（オプション）
-        if run_timeseries_validation:
-            try:
-                validation_result = prediction_system.run_timeseries_validation()
-                training_results["timeseries_validation"] = {
-                    "success": validation_result is not None,
-                    "result": validation_result
-                }
-            except Exception as e:
-                logger.error(f"時系列検証エラー: {e}")
-                training_results["timeseries_validation"] = {
-                    "success": False,
-                    "error": str(e)
-                }
-        
-        # 4. 自動照合・学習改善（オプション）
-        if run_auto_verification:
-            try:
-                verification_result = prediction_system.run_auto_verification_learning()
-                training_results["auto_verification"] = {
-                    "success": verification_result is not None,
-                    "verified_count": verification_result.get('verified_count', 0) if verification_result else 0,
-                    "improvements": verification_result.get('improvements', {}) if verification_result else {}
-                }
-            except Exception as e:
-                logger.error(f"自動照合学習エラー: {e}")
-                training_results["auto_verification"] = {
-                    "success": False,
-                    "error": str(e)
-                }
-        
-        # 5. モデル・履歴保存
-        file_manager.save_model(prediction_system)
-        file_manager.save_history(prediction_system.history)
-        
-        return create_success_response(training_results, "学習処理が完了しました")
-    
     except Exception as e:
-        logger.error(f"学習エラー: {e}")
-        logger.error(traceback.format_exc())
-        return create_error_response(f"学習処理中にエラーが発生しました: {str(e)}", 500)
+        logger.error(f"非同期学習API開始エラー: {e}")
+        return create_error_response(f"学習タスクの開始に失敗しました: {str(e)}", 500)
 
+# 🔥 非同期API: 時系列検証
+@app.route('/api/validation', methods=['POST'])
+def validation_async():
+    """非同期時系列検証"""
+    try:
+        # 非同期タスクを開始
+        task = tasks.validation_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '時系列検証を開始しました',
+            'estimated_time': '3-10分'
+        }, "検証タスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"非同期検証API開始エラー: {e}")
+        return create_error_response(f"検証タスクの開始に失敗しました: {str(e)}", 500)
+
+# 🔥 タスク状態確認API
+@app.route('/api/task/<task_id>', methods=['GET'])
+def get_task_status_api(task_id):
+    """タスクの実行状態を確認"""
+    try:
+        task_status = get_task_status(task_id)
+        return create_success_response(task_status, "タスク状態を取得しました")
+        
+    except Exception as e:
+        logger.error(f"タスク状態確認エラー: {e}")
+        return create_error_response(f"タスク状態の確認に失敗しました: {str(e)}", 500)
+
+# 🔥 タスクキャンセルAPI
+@app.route('/api/task/<task_id>/cancel', methods=['POST'])
+def cancel_task(task_id):
+    """タスクをキャンセル"""
+    try:
+        celery_app.control.revoke(task_id, terminate=True)
+        
+        return create_success_response({
+            'task_id': task_id,
+            'status': 'cancelled'
+        }, "タスクをキャンセルしました")
+        
+    except Exception as e:
+        logger.error(f"タスクキャンセルエラー: {e}")
+        return create_error_response(f"タスクのキャンセルに失敗しました: {str(e)}", 500)
+
+# 📊 システム状態API（詳細版）
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    """システム状態取得（詳細版）"""
+    try:
+        # メモリ使用量の取得
+        memory_info = {}
+        try:
+            process = psutil.Process(os.getpid())
+            memory_info = {
+                'memory_usage_mb': round(process.memory_info().rss / 1024 / 1024, 1),
+                'memory_percent': round(process.memory_percent(), 1),
+                'cpu_percent': round(process.cpu_percent(), 1)
+            }
+        except:
+            pass
+        
+        # ファイル状態
+        files_status = {}
+        if file_manager:
+            files_status = {
+                "model_exists": file_manager.model_exists(),
+                "history_exists": file_manager.history_exists(),
+                "data_cached": file_manager.data_cached()
+            }
+        
+        # Celery状態
+        celery_status = {}
+        try:
+            # アクティブなタスク数を確認
+            inspect = celery_app.control.inspect()
+            active_tasks = inspect.active()
+            if active_tasks:
+                total_active = sum(len(tasks) for tasks in active_tasks.values())
+                celery_status['active_tasks'] = total_active
+            else:
+                celery_status['active_tasks'] = 0
+                
+            celery_status['broker_connected'] = True
+        except:
+            celery_status['broker_connected'] = False
+            celery_status['active_tasks'] = 0
+        
+        status = {
+            "initialized": file_manager is not None,
+            "async_mode": True,
+            "files": files_status,
+            "memory": memory_info,
+            "celery": celery_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return create_success_response(status)
+        
+    except Exception as e:
+        logger.error(f"ステータス取得エラー: {e}")
+        return create_error_response(f"ステータス取得中にエラーが発生しました: {str(e)}", 500)
+
+# 📊 簡単なデータ取得API（同期処理可能）
+@app.route('/api/recent_results', methods=['GET'])
+def get_recent_results():
+    """最近の抽選結果を取得（同期処理）"""
+    try:
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
+        
+        # キャッシュファイルが存在するかチェック
+        if not file_manager.data_cached():
+            return create_error_response("データがキャッシュされていません。初期化を実行してください", 404)
+        
+        # キャッシュからデータを読み込み（軽量処理）
+        cached_data = file_manager.load_data_cache()
+        if cached_data is None or len(cached_data) == 0:
+            return create_error_response("キャッシュデータが無効です", 500)
+        
+        count = int(request.args.get('count', 5))
+        count = min(max(count, 1), 20)  # 1-20の範囲に制限
+        
+        # 最新のcount件を取得（軽量処理）
+        recent_data = cached_data.nlargest(count, '開催回')
+        
+        results = []
+        for _, row in recent_data.iterrows():
+            try:
+                round_num = int(row['開催回'])
+                main_numbers = []
+                
+                # メイン数字を取得
+                main_cols = ['第1数字', '第2数字', '第3数字', '第4数字', '第5数字', '第6数字', '第7数字']
+                for col in main_cols:
+                    if col in row.index and not pd.isna(row[col]):
+                        main_numbers.append(int(row[col]))
+                
+                if len(main_numbers) == 7:
+                    results.append({
+                        'round': round_num,
+                        'date': row.get('日付', ''),
+                        'main_numbers': sorted(main_numbers),
+                        'bonus_numbers': []  # ボーナス数字は省略（軽量化）
+                    })
+            except:
+                continue
+        
+        response_data = {
+            'results': sorted(results, key=lambda x: x['round'], reverse=True),
+            'count': len(results),
+            'latest_round': int(cached_data['開催回'].max()) if len(cached_data) > 0 else 0
+        }
+        
+        return create_success_response(response_data, f"最近{len(results)}回の結果を取得しました")
+        
+    except Exception as e:
+        logger.error(f"最近の結果取得エラー: {e}")
+        return create_error_response(f"最近の結果取得中にエラーが発生しました: {str(e)}", 500)
+
+# ファイル関連API（軽量処理）
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_file(filename):
     """ファイルダウンロード"""
@@ -482,6 +424,9 @@ def download_file(filename):
         
         if filename not in allowed_files:
             return create_error_response(f"ダウンロード許可されていないファイル: {filename}", 400)
+        
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
         
         file_path = file_manager.get_file_path(filename)
         
@@ -503,6 +448,9 @@ def upload_file(filename):
         if filename not in allowed_files:
             return create_error_response(f"アップロード許可されていないファイル: {filename}", 400)
         
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
+        
         if 'file' not in request.files:
             return create_error_response("ファイルが指定されていません", 400)
         
@@ -515,22 +463,6 @@ def upload_file(filename):
         file_path = file_manager.get_file_path(filename)
         file.save(file_path)
         
-        # モデルファイルの場合は読み込み
-        if filename == 'model.pkl' and prediction_system:
-            try:
-                prediction_system.load_models()
-                logger.info("アップロードされたモデルを読み込みました")
-            except Exception as e:
-                logger.error(f"モデル読み込みエラー: {e}")
-        
-        # 履歴ファイルの場合は読み込み
-        if filename == 'prediction_history.csv' and prediction_system:
-            try:
-                prediction_system.history.load_from_csv()
-                logger.info("アップロードされた履歴を読み込みました")
-            except Exception as e:
-                logger.error(f"履歴読み込みエラー: {e}")
-        
         return create_success_response({
             "filename": filename,
             "size": os.path.getsize(file_path)
@@ -540,100 +472,60 @@ def upload_file(filename):
         logger.error(f"アップロードエラー: {e}")
         return create_error_response(f"アップロード中にエラーが発生しました: {str(e)}", 500)
 
-@app.route('/api/status', methods=['GET'])
-def get_status():
-    """システム状態取得"""
-    try:
-        if prediction_system:
-            status = prediction_system.get_system_status()
-        else:
-            status = {
-                "system_initialized": False,
-                "files": {
-                    "model_exists": file_manager.model_exists() if file_manager else False,
-                    "history_exists": file_manager.history_exists() if file_manager else False,
-                    "data_cached": file_manager.data_cached() if file_manager else False
-                }
-            }
-        
-        return create_success_response(status)
-    
-    except Exception as e:
-        logger.error(f"ステータス取得エラー: {e}")
-        return create_error_response(f"ステータス取得中にエラーが発生しました: {str(e)}", 500)
+# PWA必須ファイル
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    """静的ファイル配信"""
+    return send_from_directory('static', filename)
 
-@app.route('/api/recent_results', methods=['GET'])
-def get_recent_results():
-    """最近の抽選結果を取得"""
-    try:
-        if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
-        
-        # データが読み込まれていない場合は取得
-        if prediction_system.data_fetcher.latest_data is None:
-            if not prediction_system.data_fetcher.fetch_latest_data():
-                return create_error_response("データの取得に失敗しました", 500)
-        
-        count = int(request.args.get('count', 5))
-        count = min(max(count, 1), 20)  # 1-20の範囲に制限
-        
-        recent_results = prediction_system.data_fetcher.get_recent_results(count)
-        
-        response_data = {
-            'results': recent_results,
-            'count': len(recent_results),
-            'latest_round': prediction_system.data_fetcher.latest_round
-        }
-        
-        return create_success_response(response_data, f"最近{len(recent_results)}回の結果を取得しました")
-    
-    except Exception as e:
-        logger.error(f"最近の結果取得エラー: {e}")
-        return create_error_response(f"最近の結果取得中にエラーが発生しました: {str(e)}", 500)
+@app.route('/manifest.json')
+def manifest():
+    """PWA Manifest"""
+    return send_from_directory('static', 'manifest.json')
 
-@app.route('/api/prediction_history', methods=['GET'])
-def get_prediction_history():
-    """予測履歴を取得"""
-    try:
-        if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
-        
-        count = int(request.args.get('count', 5))
-        count = min(max(count, 1), 20)  # 1-20の範囲に制限
-        
-        recent_predictions = prediction_system.history.get_recent_predictions(count)
-        accuracy_report = prediction_system.history.get_accuracy_report()
-        
-        response_data = {
-            'recent_predictions': recent_predictions,
-            'accuracy_report': accuracy_report,
-            'total_predictions': len(prediction_system.history.predictions)
-        }
-        
-        return create_success_response(response_data, f"予測履歴を取得しました")
-    
-    except Exception as e:
-        logger.error(f"予測履歴取得エラー: {e}")
-        return create_error_response(f"予測履歴取得中にエラーが発生しました: {str(e)}", 500)
+@app.route('/sw.js')
+def service_worker():
+    """Service Worker"""
+    response = send_from_directory('static', 'sw.js')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
-@app.route('/api/prediction_analysis/<int:round_number>', methods=['GET'])
-def get_prediction_analysis(round_number):
-    """指定開催回の予測詳細分析を取得"""
+# 🔥 メモリ最適化API
+@app.route('/api/optimize', methods=['POST'])
+def optimize_system():
+    """システム最適化（メモリクリーンアップ）"""
     try:
-        if not prediction_system:
-            return create_error_response("システムが初期化されていません", 500)
+        before_memory = 0
+        after_memory = 0
         
-        analysis = prediction_system.history.get_detailed_analysis(round_number)
+        try:
+            process = psutil.Process(os.getpid())
+            before_memory = process.memory_info().rss / 1024 / 1024
+        except:
+            pass
         
-        if not analysis:
-            return create_error_response(f"第{round_number}回の予測が見つかりません", 404)
+        # メモリ最適化実行
+        optimize_memory()
         
-        return create_success_response(analysis, f"第{round_number}回の詳細分析を取得しました")
-    
+        try:
+            process = psutil.Process(os.getpid())
+            after_memory = process.memory_info().rss / 1024 / 1024
+        except:
+            pass
+        
+        return create_success_response({
+            'before_memory_mb': round(before_memory, 1),
+            'after_memory_mb': round(after_memory, 1),
+            'freed_memory_mb': round(before_memory - after_memory, 1)
+        }, "システム最適化が完了しました")
+        
     except Exception as e:
-        logger.error(f"予測分析取得エラー: {e}")
-        return create_error_response(f"予測分析取得中にエラーが発生しました: {str(e)}", 500)
+        logger.error(f"システム最適化エラー: {e}")
+        return create_error_response(f"システム最適化中にエラーが発生しました: {str(e)}", 500)
 
+# エラーハンドラー
 @app.errorhandler(404)
 def not_found(error):
     return create_error_response("エンドポイントが見つかりません", 404)
@@ -642,14 +534,37 @@ def not_found(error):
 def internal_error(error):
     return create_error_response("内部サーバーエラー", 500)
 
+@app.errorhandler(413)
+def file_too_large(error):
+    return create_error_response("ファイルサイズが大きすぎます（最大16MB）", 413)
+
+# 定期的なメモリ最適化
+import threading
+import time
+
+def periodic_optimization():
+    """定期的なメモリ最適化（5分ごと）"""
+    while True:
+        time.sleep(300)  # 5分待機
+        try:
+            optimize_memory()
+        except:
+            pass
+
+# バックグラウンドでメモリ最適化を実行
 if __name__ == '__main__':
-    logger.info("Loto7 Prediction API starting...")
+    # 定期最適化スレッドを開始
+    optimization_thread = threading.Thread(target=periodic_optimization, daemon=True)
+    optimization_thread.start()
+
+if __name__ == '__main__':
+    logger.info("Loto7 Prediction API starting (Async Mode)...")
     
-    # システム初期化
-    if init_system():
-        logger.info("システム初期化成功")
+    # 🔥 超軽量初期化のみ実行
+    if ultra_light_init():
+        logger.info("✅ 超軽量初期化成功 - 重い処理は非同期で実行されます")
     else:
-        logger.warning("システム初期化に問題がありました")
+        logger.error("❌ 超軽量初期化失敗")
     
-    # Flask開発サーバー起動（本番環境ではgunicornなどを使用）
+    # Flask開発サーバー起動
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
