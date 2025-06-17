@@ -1,5 +1,5 @@
 """
-Celery設定 - 非同期タスク処理
+Celery設定 - 非同期タスク処理（修正版）
 """
 
 import os
@@ -35,7 +35,7 @@ def make_celery(app_name=__name__):
         include=['tasks']  # タスクモジュールを指定
     )
     
-    # Celery設定
+    # Celery設定（修正版）
     celery.conf.update(
         # タスク設定
         task_serializer='json',
@@ -44,10 +44,12 @@ def make_celery(app_name=__name__):
         timezone='Asia/Tokyo',
         enable_utc=True,
         
-        # ワーカー設定
+        # ワーカー設定（修正版）
         worker_prefetch_multiplier=1,
         task_acks_late=True,
         worker_disable_rate_limits=True,
+        worker_max_tasks_per_child=10,      # ✅ ここで設定
+        worker_max_memory_per_child=400000, # ✅ ここで設定
         
         # 結果保存設定
         result_expires=3600,  # 1時間で結果を削除
@@ -59,10 +61,6 @@ def make_celery(app_name=__name__):
             'tasks.validation_task': {'queue': 'validation'},
             'tasks.progressive_learning_stage_task': {'queue': 'learning'},
         },
-        
-        # メモリ最適化
-        worker_max_tasks_per_child=50,  # ワーカーを定期的に再起動
-        worker_max_memory_per_child=400000,  # 400MBでワーカー再起動
         
         # タイムアウト設定
         task_soft_time_limit=300,  # 5分のソフトタイムアウト
