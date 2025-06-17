@@ -1,6 +1,6 @@
 """
-Celeryタスク定義
-長時間処理を非同期で実行
+Celeryタスク定義（段階的学習対応版）
+各学習段階を独立したタスクとして実行
 """
 
 import traceback
@@ -25,22 +25,21 @@ def update_task_progress(current, total, status_message):
             }
         )
 
+# === 既存タスク（そのまま維持） ===
+
 @celery_app.task(bind=True, name='tasks.heavy_init_task')
 def heavy_init_task(self):
     """重いコンポーネントの初期化タスク"""
     try:
         update_task_progress(0, 4, "初期化を開始しています...")
         
-        # ファイル管理器の初期化
         file_manager = FileManager()
         update_task_progress(1, 4, "ファイル管理器を初期化しました")
         
-        # 予測システムの初期化
         prediction_system = AutoFetchEnsembleLoto7()
         prediction_system.set_file_manager(file_manager)
         update_task_progress(2, 4, "予測システムを初期化しました")
         
-        # 保存済みモデルの読み込み
         models_loaded = False
         if file_manager.model_exists():
             try:
@@ -49,7 +48,6 @@ def heavy_init_task(self):
             except Exception as e:
                 logger.warning(f"モデル読み込み警告: {e}")
         
-        # データ取得（タイムアウト付き）
         data_loaded = False
         try:
             data_loaded = prediction_system.data_fetcher.fetch_latest_data()
@@ -76,9 +74,161 @@ def heavy_init_task(self):
             'traceback': traceback.format_exc()
         }
 
+@celery_app.task(bind=True, name='tasks.predict_task')
+def predict_task(self, round_number=None):
+    """予測生成タスク"""
+    try:
+        update_task_progress(0, 3, "予測準備を開始しています...")
+        
+        file_manager = FileManager()
+        prediction_system = AutoFetchEnsembleLoto7()
+        prediction_system.set_file_manager(file_manager)
+        
+        prediction_system.load_models()
+        prediction_system.history.load_from_csv()
+        
+        update_task_progress(1, 3, "データを取得しています...")
+        
+        if not prediction_system.data_fetcher.fetch_latest_data():
+            raise Exception("データ取得に失敗しました")
+        
+        update_task_progress(2, 3, "予測を生成しています...")
+        
+        predictions, next_info = prediction_system.predict_next_round(20, use_learning=True)
+        
+        if not predictions:
+            raise Exception("予測生成に失敗しました")
+        
+        update_task_progress(3, 3, "予測生成が完了しました")
+        
+        return {
+            'status': 'success',
+            'message': '予測生成が完了しました',
+            'predictions': predictions,
+            'next_info': next_info
+        }
+        
+    except Exception as e:
+        logger.error(f"予測タスクエラー: {e}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }
+
+# === 🔥 新規追加：段階的学習タスク ===
+
+@celery_app.task(bind=True, name='tasks.progressive_learning_stage_task')
+def progressive_learning_stage_task(self, stage_id):
+    """段階的学習の単一段階実行タスク"""
+    try:
+        update_task_progress(0, 5, f"段階的学習準備: {stage_id}")
+        
+        # システム初期化
+        file_manager = FileManager()
+        prediction_system = AutoFetchEnsembleLoto7()
+        prediction_system.set_file_manager(file_manager)
+        
+        # 保存済みデータ読み込み
+        prediction_system.load_models()
+        prediction_system.history.load_from_csv()
+        
+        update_task_progress(1, 5, "段階的学習マネージャー初期化中...")
+        
+        # 段階的学習マネージャー初期化
+        from models.progressive_learning import ProgressiveLearningManager
+        learning_manager = ProgressiveLearningManager(prediction_system)
+        learning_manager.load_learning_state()
+        
+        update_task_progress(2, 5, f"学習段階 {stage_id} を開始しています...")
+        
+        # 段階実行
+        result = learning_manager.execute_learning_stage(stage_id)
+        
+        update_task_progress(3, 5, "結果を保存中...")
+        
+        # モデル・状態保存
+        file_manager.save_model(prediction_system)
+        learning_manager.save_learning_state()
+        
+        update_task_progress(4, 5, "学習進捗を更新中...")
+        
+        # 進捗情報取得
+        progress_info = learning_manager.get_learning_progress()
+        
+        update_task_progress(5, 5, f"段階 {stage_id} が完了しました")
+        
+        return {
+            'status': 'success',
+            'message': f'学習段階 {stage_id} が完了しました',
+            'stage_result': result,
+            'learning_progress': progress_info
+        }
+        
+    except Exception as e:
+        logger.error(f"段階的学習タスクエラー ({stage_id}): {e}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'stage_id': stage_id,
+            'traceback': traceback.format_exc()
+        }
+
+@celery_app.task(bind=True, name='tasks.get_learning_progress_task')
+def get_learning_progress_task(self):
+    """学習進捗状況を取得するタスク"""
+    try:
+        file_manager = FileManager()
+        prediction_system = AutoFetchEnsembleLoto7()
+        prediction_system.set_file_manager(file_manager)
+        
+        from models.progressive_learning import ProgressiveLearningManager
+        learning_manager = ProgressiveLearningManager(prediction_system)
+        learning_manager.load_learning_state()
+        
+        progress_info = learning_manager.get_learning_progress()
+        
+        return {
+            'status': 'success',
+            'progress': progress_info
+        }
+        
+    except Exception as e:
+        logger.error(f"学習進捗取得タスクエラー: {e}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+@celery_app.task(bind=True, name='tasks.reset_learning_progress_task')
+def reset_learning_progress_task(self):
+    """学習進捗をリセットするタスク"""
+    try:
+        file_manager = FileManager()
+        prediction_system = AutoFetchEnsembleLoto7()
+        prediction_system.set_file_manager(file_manager)
+        
+        from models.progressive_learning import ProgressiveLearningManager
+        learning_manager = ProgressiveLearningManager(prediction_system)
+        learning_manager.reset_learning_progress()
+        
+        return {
+            'status': 'success',
+            'message': '学習進捗をリセットしました'
+        }
+        
+    except Exception as e:
+        logger.error(f"学習進捗リセットタスクエラー: {e}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+# === 既存の一括学習タスク（後方互換性のため維持） ===
+
 @celery_app.task(bind=True, name='tasks.train_model_task')
 def train_model_task(self, options=None):
-    """モデル学習タスク"""
+    """モデル学習タスク（一括処理版）"""
     try:
         if options is None:
             options = {}
@@ -173,55 +323,9 @@ def train_model_task(self, options=None):
             'traceback': traceback.format_exc()
         }
 
-@celery_app.task(bind=True, name='tasks.predict_task')
-def predict_task(self, round_number=None):
-    """予測生成タスク"""
-    try:
-        update_task_progress(0, 3, "予測準備を開始しています...")
-        
-        # システム初期化
-        file_manager = FileManager()
-        prediction_system = AutoFetchEnsembleLoto7()
-        prediction_system.set_file_manager(file_manager)
-        
-        # 保存済みデータの読み込み
-        prediction_system.load_models()
-        prediction_system.history.load_from_csv()
-        
-        update_task_progress(1, 3, "データを取得しています...")
-        
-        # データ取得
-        if not prediction_system.data_fetcher.fetch_latest_data():
-            raise Exception("データ取得に失敗しました")
-        
-        update_task_progress(2, 3, "予測を生成しています...")
-        
-        # 予測生成
-        predictions, next_info = prediction_system.predict_next_round(20, use_learning=True)
-        
-        if not predictions:
-            raise Exception("予測生成に失敗しました")
-        
-        update_task_progress(3, 3, "予測生成が完了しました")
-        
-        return {
-            'status': 'success',
-            'message': '予測生成が完了しました',
-            'predictions': predictions,
-            'next_info': next_info
-        }
-        
-    except Exception as e:
-        logger.error(f"予測タスクエラー: {e}")
-        return {
-            'status': 'error',
-            'message': str(e),
-            'traceback': traceback.format_exc()
-        }
-
 @celery_app.task(bind=True, name='tasks.validation_task')
 def validation_task(self):
-    """時系列検証タスク"""
+    """時系列検証タスク（一括処理版）"""
     try:
         update_task_progress(0, 3, "検証準備を開始しています...")
         

@@ -415,6 +415,125 @@ def get_recent_results():
         logger.error(f"最近の結果取得エラー: {e}")
         return create_error_response(f"最近の結果取得中にエラーが発生しました: {str(e)}", 500)
 
+# app.py に追加するAPIエンドポイント
+
+# 🔥 段階的学習API群
+
+@app.route('/api/learning/progress', methods=['GET'])
+def get_learning_progress():
+    """学習進捗状況を取得"""
+    try:
+        task = tasks.get_learning_progress_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '学習進捗を取得中...'
+        }, "学習進捗取得タスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"学習進捗取得APIエラー: {e}")
+        return create_error_response(f"学習進捗取得の開始に失敗しました: {str(e)}", 500)
+
+@app.route('/api/learning/stage/<stage_id>', methods=['POST'])
+def execute_learning_stage(stage_id):
+    """指定された学習段階を実行"""
+    try:
+        # 有効な段階IDチェック
+        valid_stages = [
+            'stage1_fixed_10', 'stage2_fixed_20', 'stage3_fixed_30', 
+            'stage4_expanding', 'stage5_ensemble'
+        ]
+        
+        if stage_id not in valid_stages:
+            return create_error_response(f"無効な学習段階ID: {stage_id}", 400)
+        
+        # 非同期タスクを開始
+        task = tasks.progressive_learning_stage_task.delay(stage_id)
+        
+        return create_success_response({
+            'task_id': task.id,
+            'stage_id': stage_id,
+            'status': 'started',
+            'message': f'学習段階 {stage_id} を開始しました'
+        }, f"学習段階 {stage_id} のタスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"学習段階実行APIエラー ({stage_id}): {e}")
+        return create_error_response(f"学習段階 {stage_id} の開始に失敗しました: {str(e)}", 500)
+
+@app.route('/api/learning/reset', methods=['POST'])
+def reset_learning_progress():
+    """学習進捗をリセット"""
+    try:
+        task = tasks.reset_learning_progress_task.delay()
+        
+        return create_success_response({
+            'task_id': task.id,
+            'status': 'started',
+            'message': '学習進捗をリセット中...'
+        }, "学習進捗リセットタスクを開始しました")
+        
+    except Exception as e:
+        logger.error(f"学習進捗リセットAPIエラー: {e}")
+        return create_error_response(f"学習進捗リセットの開始に失敗しました: {str(e)}", 500)
+
+@app.route('/api/learning/stages', methods=['GET'])
+def get_available_stages():
+    """利用可能な学習段階を取得（同期処理）"""
+    try:
+        # 軽量処理なので同期で実行
+        if not file_manager:
+            return create_error_response("システムが初期化されていません", 500)
+        
+        # 基本的な段階情報を返す
+        stages_info = {
+            'stage1_fixed_10': {
+                'id': 'stage1_fixed_10',
+                'name': '固定窓検証（10回分）',
+                'description': '直近10回での予測パターン分析',
+                'estimated_time': '3-5分',
+                'status': 'available'
+            },
+            'stage2_fixed_20': {
+                'id': 'stage2_fixed_20',
+                'name': '固定窓検証（20回分）',
+                'description': '中期20回での予測パターン分析',
+                'estimated_time': '5-8分',
+                'status': 'available'
+            },
+            'stage3_fixed_30': {
+                'id': 'stage3_fixed_30',
+                'name': '固定窓検証（30回分）',
+                'description': '長期30回での予測パターン分析',
+                'estimated_time': '8-12分',
+                'status': 'available'
+            },
+            'stage4_expanding': {
+                'id': 'stage4_expanding',
+                'name': '累積窓検証',
+                'description': '全履歴を活用した累積学習',
+                'estimated_time': '10-15分',
+                'status': 'available'
+            },
+            'stage5_ensemble': {
+                'id': 'stage5_ensemble',
+                'name': 'アンサンブル最適化',
+                'description': '全段階の結果を統合した最終調整',
+                'estimated_time': '2-3分',
+                'status': 'available'
+            }
+        }
+        
+        return create_success_response({
+            'stages': list(stages_info.values()),
+            'total_stages': len(stages_info)
+        }, "利用可能な学習段階を取得しました")
+        
+    except Exception as e:
+        logger.error(f"学習段階取得APIエラー: {e}")
+        return create_error_response(f"学習段階取得中にエラーが発生しました: {str(e)}", 500)
+
 # ファイル関連API（軽量処理）
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_file(filename):
